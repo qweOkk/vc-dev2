@@ -190,11 +190,6 @@ class VALLETrainer(TTSTrainer):
                     step=self.step,
                 )
 
-                # print loss every log_epoch_step steps
-                # if epoch_step % self.cfg.train.log_epoch_step == 0:
-                #     for key, loss in train_losses.items():
-                #         self.logger.info("Step/Train {}: {:.6f}".format(key, loss))
-                #         print("Step/Train {}: {:.6f}".format(key, loss))
 
                 self.step += 1
                 epoch_step += 1

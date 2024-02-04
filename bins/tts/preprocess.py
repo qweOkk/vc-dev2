@@ -122,108 +122,108 @@ def preprocess(cfg, args):
             is_custom_dataset=dataset in cfg.use_custom_dataset,
         )
 
-    # Data augmentation: create new wav files with pitch shift, formant shift, equalizer, time stretch
-    try:
-        assert isinstance(
-            cfg.preprocess.data_augment, list
-        ), "Please provide a list of datasets need to be augmented."
-        if len(cfg.preprocess.data_augment) > 0:
-            new_datasets_list = []
-            for dataset in cfg.preprocess.data_augment:
-                new_datasets = data_augment.augment_dataset(cfg, dataset)
-                new_datasets_list.extend(new_datasets)
-            cfg.dataset.extend(new_datasets_list)
-            print("Augmentation datasets: ", cfg.dataset)
-    except:
-        print("No Data Augmentation.")
+    # # Data augmentation: create new wav files with pitch shift, formant shift, equalizer, time stretch
+    # try:
+    #     assert isinstance(
+    #         cfg.preprocess.data_augment, list
+    #     ), "Please provide a list of datasets need to be augmented."
+    #     if len(cfg.preprocess.data_augment) > 0:
+    #         new_datasets_list = []
+    #         for dataset in cfg.preprocess.data_augment:
+    #             new_datasets = data_augment.augment_dataset(cfg, dataset)
+    #             new_datasets_list.extend(new_datasets)
+    #         cfg.dataset.extend(new_datasets_list)
+    #         print("Augmentation datasets: ", cfg.dataset)
+    # except:
+    #     print("No Data Augmentation.")
 
-    # json files
-    dataset_types = list()
-    dataset_types.append((cfg.preprocess.train_file).split(".")[0])
-    dataset_types.append((cfg.preprocess.valid_file).split(".")[0])
-    if "test" not in dataset_types:
-        dataset_types.append("test")
-    if "eval" in dataset:
-        dataset_types = ["test"]
+    # # json files
+    # dataset_types = list()
+    # dataset_types.append((cfg.preprocess.train_file).split(".")[0])
+    # dataset_types.append((cfg.preprocess.valid_file).split(".")[0])
+    # if "test" not in dataset_types:
+    #     dataset_types.append("test")
+    # if "eval" in dataset:
+    #     dataset_types = ["test"]
 
-    # Dump metadata of datasets (singers, train/test durations, etc.)
-    cal_metadata(cfg, dataset_types)
+    # # Dump metadata of datasets (singers, train/test durations, etc.)
+    # cal_metadata(cfg, dataset_types)
 
-    # Prepare the acoustic features
-    for dataset in cfg.dataset:
-        # Skip augmented datasets which do not need to extract acoustic features
-        # We will copy acoustic features from the original dataset later
-        if (
-            "pitch_shift" in dataset
-            or "formant_shift" in dataset
-            or "equalizer" in dataset in dataset
-        ):
-            continue
-        print(
-            "Extracting acoustic features for {} using {} workers ...".format(
-                dataset, args.num_workers
-            )
-        )
-        extract_acoustic_features(
-            dataset, output_path, cfg, dataset_types, args.num_workers
-        )
-        # Calculate the statistics of acoustic features
-        if cfg.preprocess.mel_min_max_norm:
-            acoustic_extractor.cal_mel_min_max(dataset, output_path, cfg)
+    # # Prepare the acoustic features
+    # for dataset in cfg.dataset:
+    #     # Skip augmented datasets which do not need to extract acoustic features
+    #     # We will copy acoustic features from the original dataset later
+    #     if (
+    #         "pitch_shift" in dataset
+    #         or "formant_shift" in dataset
+    #         or "equalizer" in dataset in dataset
+    #     ):
+    #         continue
+    #     print(
+    #         "Extracting acoustic features for {} using {} workers ...".format(
+    #             dataset, args.num_workers
+    #         )
+    #     )
+    #     extract_acoustic_features(
+    #         dataset, output_path, cfg, dataset_types, args.num_workers
+    #     )
+    #     # Calculate the statistics of acoustic features
+    #     if cfg.preprocess.mel_min_max_norm:
+    #         acoustic_extractor.cal_mel_min_max(dataset, output_path, cfg)
 
-        if cfg.preprocess.extract_pitch:
-            acoustic_extractor.cal_pitch_statistics(dataset, output_path, cfg)
+    #     if cfg.preprocess.extract_pitch:
+    #         acoustic_extractor.cal_pitch_statistics(dataset, output_path, cfg)
 
-        if cfg.preprocess.extract_energy:
-            acoustic_extractor.cal_energy_statistics(dataset, output_path, cfg)
+    #     if cfg.preprocess.extract_energy:
+    #         acoustic_extractor.cal_energy_statistics(dataset, output_path, cfg)
 
-        if cfg.preprocess.pitch_norm:
-            acoustic_extractor.normalize(dataset, cfg.preprocess.pitch_dir, cfg)
+    #     if cfg.preprocess.pitch_norm:
+    #         acoustic_extractor.normalize(dataset, cfg.preprocess.pitch_dir, cfg)
 
-        if cfg.preprocess.energy_norm:
-            acoustic_extractor.normalize(dataset, cfg.preprocess.energy_dir, cfg)
+    #     if cfg.preprocess.energy_norm:
+    #         acoustic_extractor.normalize(dataset, cfg.preprocess.energy_dir, cfg)
 
-    # Copy acoustic features for augmented datasets by creating soft-links
-    for dataset in cfg.dataset:
-        if "pitch_shift" in dataset:
-            src_dataset = dataset.replace("_pitch_shift", "")
-            src_dataset_dir = os.path.join(output_path, src_dataset)
-        elif "formant_shift" in dataset:
-            src_dataset = dataset.replace("_formant_shift", "")
-            src_dataset_dir = os.path.join(output_path, src_dataset)
-        elif "equalizer" in dataset:
-            src_dataset = dataset.replace("_equalizer", "")
-            src_dataset_dir = os.path.join(output_path, src_dataset)
-        else:
-            continue
-        dataset_dir = os.path.join(output_path, dataset)
-        metadata = []
-        for split in ["train", "test"] if not "eval" in dataset else ["test"]:
-            metadata_file_path = os.path.join(src_dataset_dir, "{}.json".format(split))
-            with open(metadata_file_path, "r") as f:
-                metadata.extend(json.load(f))
-        print("Copying acoustic features for {}...".format(dataset))
-        acoustic_extractor.copy_acoustic_features(
-            metadata, dataset_dir, src_dataset_dir, cfg
-        )
-        if cfg.preprocess.mel_min_max_norm:
-            acoustic_extractor.cal_mel_min_max(dataset, output_path, cfg)
+    # # Copy acoustic features for augmented datasets by creating soft-links
+    # for dataset in cfg.dataset:
+    #     if "pitch_shift" in dataset:
+    #         src_dataset = dataset.replace("_pitch_shift", "")
+    #         src_dataset_dir = os.path.join(output_path, src_dataset)
+    #     elif "formant_shift" in dataset:
+    #         src_dataset = dataset.replace("_formant_shift", "")
+    #         src_dataset_dir = os.path.join(output_path, src_dataset)
+    #     elif "equalizer" in dataset:
+    #         src_dataset = dataset.replace("_equalizer", "")
+    #         src_dataset_dir = os.path.join(output_path, src_dataset)
+    #     else:
+    #         continue
+    #     dataset_dir = os.path.join(output_path, dataset)
+    #     metadata = []
+    #     for split in ["train", "test"] if not "eval" in dataset else ["test"]:
+    #         metadata_file_path = os.path.join(src_dataset_dir, "{}.json".format(split))
+    #         with open(metadata_file_path, "r") as f:
+    #             metadata.extend(json.load(f))
+    #     print("Copying acoustic features for {}...".format(dataset))
+    #     acoustic_extractor.copy_acoustic_features(
+    #         metadata, dataset_dir, src_dataset_dir, cfg
+    #     )
+    #     if cfg.preprocess.mel_min_max_norm:
+    #         acoustic_extractor.cal_mel_min_max(dataset, output_path, cfg)
 
-        if cfg.preprocess.extract_pitch:
-            acoustic_extractor.cal_pitch_statistics(dataset, output_path, cfg)
+    #     if cfg.preprocess.extract_pitch:
+    #         acoustic_extractor.cal_pitch_statistics(dataset, output_path, cfg)
 
-    # Prepare the content features
-    for dataset in cfg.dataset:
-        print("Extracting content features for {}...".format(dataset))
-        extract_content_features(
-            dataset, output_path, cfg, dataset_types, args.num_workers
-        )
+    # # Prepare the content features
+    # for dataset in cfg.dataset:
+    #     print("Extracting content features for {}...".format(dataset))
+    #     extract_content_features(
+    #         dataset, output_path, cfg, dataset_types, args.num_workers
+    #     )
 
-    # Prepare the phenome squences
-    if cfg.preprocess.extract_phone:
-        for dataset in cfg.dataset:
-            print("Extracting phoneme sequence for {}...".format(dataset))
-            extract_phonme_sequences(dataset, output_path, cfg, dataset_types)
+    # # Prepare the phenome squences
+    # if cfg.preprocess.extract_phone:
+    #     for dataset in cfg.dataset:
+    #         print("Extracting phoneme sequence for {}...".format(dataset))
+    #         extract_phonme_sequences(dataset, output_path, cfg, dataset_types)
 
 
 def main():
@@ -236,7 +236,6 @@ def main():
 
     args = parser.parse_args()
     cfg = load_config(args.config)
-
     preprocess(cfg, args)
 
 

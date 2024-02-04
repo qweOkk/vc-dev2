@@ -6,57 +6,119 @@
 import os
 import shutil
 import json
+import json5
 import time
 import torch
+import pyworld as pw
 import numpy as np
-from utils.util import Logger, ValueWindow
-from torch.utils.data import ConcatDataset, DataLoader
+from tqdm import tqdm
+from utils.util import ValueWindow
+from torch.utils.data import DataLoader
 from models.tts.base.tts_trainer import TTSTrainer
-from models.base.base_trainer import BaseTrainer
 from models.base.base_sampler import VariableSampler
-from models.tts.naturalspeech2.ns2_dataset import NS2Dataset, NS2Collator, batch_by_size
-from models.tts.naturalspeech2.ns2_loss import (
-    log_pitch_loss,
-    log_dur_loss,
-    diff_loss,
-    diff_ce_loss,
-)
-from torch.utils.data.sampler import BatchSampler, SequentialSampler
-from models.tts.naturalspeech2.ns2 import NaturalSpeech2
-from torch.optim import Adam, AdamW
-from torch.nn import MSELoss, L1Loss
-import torch.nn.functional as F
+
 from diffusers import get_scheduler
+import torch.nn.functional as F
 
 import accelerate
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
+from librosa.filters import mel as librosa_mel_fn
+
+from models.tts.vc.ns2_uniamphion import UniAmphionVC
+from models.tts.vc.vc_dataset import  VCCollator, VCDataset, batch_by_size
+from models.tts.vc.hubert_kmeans import HubertWithKmeans
+
+def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
+    return torch.log(torch.clamp(x, min=clip_val) * C)
+
+def diff_loss(pred, target, mask, loss_type="l1"):
+    # pred: (B, T, d)
+    # target: (B, T, d)
+    # mask: (B, T)
+    if loss_type == "l1":
+        loss = F.l1_loss(pred, target, reduction="none").float() * (
+            mask.to(pred.dtype).unsqueeze(-1)
+        )
+    elif loss_type == "l2":
+        loss = F.mse_loss(pred, target, reduction="none").float() * (
+            mask.to(pred.dtype).unsqueeze(-1)
+        )
+    else:
+        raise NotImplementedError()
+    loss = (torch.mean(loss, dim=-1)).sum() / (mask.to(pred.dtype).sum())
+    return loss
 
 
-class NS2Trainer(TTSTrainer):
+def spectral_normalize_torch(magnitudes):
+    output = dynamic_range_compression_torch(magnitudes)
+    return output
+
+mel_basis = {}
+hann_window = {}
+init_mel_and_hann = False
+
+def mel_spectrogram(
+    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
+):
+    if torch.min(y) < -1.0:
+        print("min value is ", torch.min(y))
+    if torch.max(y) > 1.0:
+        print("max value is ", torch.max(y))
+
+    global mel_basis, hann_window, init_mel_and_hann
+    if not init_mel_and_hann:
+        mel = librosa_mel_fn(
+            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
+        )
+        mel_basis[str(fmax) + "_" + str(y.device)] = (
+            torch.from_numpy(mel).float().to(y.device)
+        )
+        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+        init_mel_and_hann = True
+
+    y = torch.nn.functional.pad(
+        y.unsqueeze(1),
+        (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
+        mode="reflect",
+    )
+    y = y.squeeze(1)
+
+    # complex tensor as default, then use view_as_real for future pytorch compatibility
+    spec = torch.stft(
+        y,
+        n_fft,
+        hop_length=hop_size,
+        win_length=win_size,
+        window=hann_window[str(y.device)],
+        center=center,
+        pad_mode="reflect",
+        normalized=False,
+        onesided=True,
+        return_complex=True,
+    )
+    spec = torch.view_as_real(spec)
+
+    spec = torch.sqrt(spec.pow(2).sum(-1) + (1e-9))
+
+    spec = torch.matmul(mel_basis[str(fmax) + "_" + str(y.device)], spec)
+    spec = spectral_normalize_torch(spec)
+
+    return spec
+
+
+class VCTrainer(TTSTrainer):
     def __init__(self, args, cfg):
         self.args = args
         self.cfg = cfg
 
         cfg.exp_name = args.exp_name
-        print("init accerlerator")
         self._init_accelerator()
-        print("waiting")
         self.accelerator.wait_for_everyone()
-        print("init logger")
-        # Init logger
         with self.accelerator.main_process_first():
-            if self.accelerator.is_main_process:
-                os.makedirs(os.path.join(self.exp_dir, "checkpoint"), exist_ok=True)
-                self.log_file = os.path.join(
-                    os.path.join(self.exp_dir, "checkpoint"), "train.log"
-                )
-                self.logger = Logger(self.log_file, level=self.args.log_level).logger
-    
+            self.logger = get_logger(args.exp_name, log_level="INFO")
         self.time_window = ValueWindow(50)
-
         if self.accelerator.is_main_process:
-            # Log some info
             self.logger.info("=" * 56)
             self.logger.info("||\t\t" + "New training process started." + "\t\t||")
             self.logger.info("=" * 56)
@@ -127,7 +189,7 @@ class NS2Trainer(TTSTrainer):
             if self.accelerator.is_main_process:
                 self.logger.info("Building model...")
             start = time.monotonic_ns()
-            self.model = self._build_model()
+            self.model, self.w2v = self._build_model()
             end = time.monotonic_ns()
             if self.accelerator.is_main_process:
                 self.logger.debug(self.model)
@@ -167,6 +229,13 @@ class NS2Trainer(TTSTrainer):
                 self.model[key] = self.accelerator.prepare(self.model[key])
         else:
             self.model = self.accelerator.prepare(self.model)
+
+        # prepare w2v to accelerator
+        if isinstance(self.w2v, dict):
+            for key in self.w2v.keys():
+                self.w2v[key] = self.accelerator.prepare(self.w2v[key])
+        else:
+            self.w2v = self.accelerator.prepare(self.w2v)
 
         if isinstance(self.optimizer, dict):
             for key in self.optimizer.keys():
@@ -240,12 +309,10 @@ class NS2Trainer(TTSTrainer):
             project_dir=self.exp_dir,
             logging_dir=os.path.join(self.exp_dir, "log"),
         )
-        # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         self.accelerator = accelerate.Accelerator(
             gradient_accumulation_steps=self.cfg.train.gradient_accumulation_step,
             log_with=self.cfg.train.tracker,
             project_config=project_config,
-            # kwargs_handlers=[ddp_kwargs]
         )
         if self.accelerator.is_main_process:
             os.makedirs(project_config.project_dir, exist_ok=True)
@@ -254,17 +321,21 @@ class NS2Trainer(TTSTrainer):
             self.accelerator.init_trackers(self.args.exp_name)
 
     def _build_model(self):
-        model = NaturalSpeech2(cfg=self.cfg.model)
-        return model
+        model = UniAmphionVC(cfg=self.cfg.model)
+        w2v = HubertWithKmeans(
+            checkpoint_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3.pt",
+            kmeans_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3_L11_km1000.bin",
+        )
+        return model, w2v
 
     def _build_dataset(self):
-        return NS2Dataset, NS2Collator
+        return VCDataset, VCCollator
 
     def _build_dataloader(self):
         if self.cfg.train.use_dynamic_batchsize:
             print("Use Dynamic Batchsize......")
             Dataset, Collator = self._build_dataset()
-            train_dataset = Dataset(self.cfg, self.cfg.dataset[0], is_valid=False)
+            train_dataset = Dataset("/mnt/data2/wangyuancheng/mls_english/train/audio")
             train_collate = Collator(self.cfg)
             batch_sampler = batch_by_size(
                 train_dataset.num_frame_indices,
@@ -296,7 +367,7 @@ class NS2Trainer(TTSTrainer):
             )
             self.accelerator.wait_for_everyone()
 
-            valid_dataset = Dataset(self.cfg, self.cfg.dataset[0], is_valid=True)
+            valid_dataset = Dataset("/mnt/data2/wangyuancheng/mls_english/dev/audio")
             valid_collate = Collator(self.cfg)
             batch_sampler = batch_by_size(
                 valid_dataset.num_frame_indices,
@@ -364,7 +435,7 @@ class NS2Trainer(TTSTrainer):
             self.cfg.train.lr_scheduler,
             optimizer=self.optimizer,
             num_warmup_steps=self.cfg.train.lr_warmup_steps,
-            num_training_steps=self.cfg.train.num_train_steps,
+            num_training_steps=self.cfg.train.num_train_steps
         )
         return lr_scheduler
 
@@ -372,24 +443,25 @@ class NS2Trainer(TTSTrainer):
         criterion = torch.nn.L1Loss(reduction="mean")
         return criterion
 
-    def write_summary(self, losses, stats):
-        for key, value in losses.items():
-            self.sw.add_scalar(key, value, self.step)
-
-    def write_valid_summary(self, losses, stats):
-        for key, value in losses.items():
-            self.sw.add_scalar(key, value, self.step)
-
-    def get_state_dict(self):
-        state_dict = {
-            "model": self.model.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
-            "scheduler": self.scheduler.state_dict(),
-            "step": self.step,
-            "epoch": self.epoch,
-            "batch_size": self.cfg.train.batch_size,
-        }
-        return state_dict
+    def _count_parameters(self, model):
+        model_param = 0.0
+        if isinstance(model, dict):
+            for key, value in model.items():
+                model_param += sum(p.numel() for p in model[key].parameters())
+        else:
+            model_param = sum(p.numel() for p in model.parameters())
+        return model_param
+    
+    def _dump_cfg(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        json5.dump(
+            self.cfg,
+            open(path, "w"),
+            indent=4,
+            sort_keys=True,
+            ensure_ascii=False,
+            quote_keys=True,
+        )
 
     def load_model(self, checkpoint):
         self.step = checkpoint["step"]
@@ -399,76 +471,98 @@ class NS2Trainer(TTSTrainer):
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.scheduler.load_state_dict(checkpoint["scheduler"])
 
+    def interpolate(self, f0):
+        uv = f0 == 0
+        if len(f0[~uv]) > 0:
+            # interpolate the unvoiced f0
+            f0[uv] = np.interp(np.where(uv)[0], np.where(~uv)[0], f0[~uv])
+            uv = uv.astype("float")
+            uv = np.min(np.array([uv[:-2], uv[1:-1], uv[2:]]), axis=0)
+            uv = np.pad(uv, (1, 1))
+        return f0, uv
+
+    def extract_world_f0(self, speech):
+        audio = speech.cpu().numpy()
+        f0s = []
+        for i in range(audio.shape[0]):
+            wav = audio[i]
+            frame_num = len(wav) // 200
+            f0, t = pw.dio(wav.astype(np.float64), 16000, frame_period=12.5)
+            f0 = pw.stonemask(wav.astype(np.float64), f0, t, 16000)
+            f0, _ = self.interpolate(f0)
+            f0 = torch.from_numpy(f0).to(speech.device)
+            f0s.append(f0[:frame_num])
+        f0s = torch.stack(f0s, dim=0).float()
+        return f0s
+
     def _train_step(self, batch):
         train_losses = {}
-        total_loss = 0
         train_stats = {}
+        device = self.accelerator.device
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                batch[k] = v.to(device)
+        self.w2v = self.w2v.to(device)
+        speech = batch["speech"]
+        ref_speech = batch["ref_speech"]
+        with torch.set_grad_enabled(False):
+            batch["pitch"] = self.extract_world_f0(batch["speech"])
+            pitch = (batch["pitch"] - batch["pitch"].mean(dim=1, keepdim=True)) / (
+                batch["pitch"].std(dim=1, keepdim=True) + 1e-6
+            )  
+            batch["pitch"] = pitch
+            mel = mel_spectrogram(
+                speech,
+                n_fft=1024,
+                num_mels=80,
+                sampling_rate=16000,
+                hop_size=200,
+                win_size=800,
+                fmin=0,
+                fmax=8000,
+            )  # (B, 80, T)
+            ref_mel = mel_spectrogram(
+                ref_speech,
+                n_fft=1024,
+                num_mels=80,
+                sampling_rate=16000,
+                hop_size=200,
+                win_size=800,
+                fmin=0,
+                fmax=8000,
+            )  # (B, 80, T')
 
-        code = batch["code"]  # (B, 16, T)
-        pitch = batch["pitch"]  # (B, T)
-        duration = batch["duration"]  # (B, N)
-        phone_id = batch["phone_id"]  # (B, N)
-        ref_code = batch["ref_code"]  # (B, 16, T')
-        phone_mask = batch["phone_mask"]  # (B, N)
-        mask = batch["mask"]  # (B, T)
-        ref_mask = batch["ref_mask"]  # (B, T')
+            mel = mel.transpose(1, 2)
+            ref_mel = ref_mel.transpose(1, 2)
 
-        diff_out, prior_out = self.model(
-            code=code,
+            _, content_feature = self.w2v(speech)
+            pitch = batch["pitch"]
+            mask = batch["mask"]
+            ref_mask = batch["ref_mask"]
+
+        with torch.set_grad_enabled(True):
+            diff_out = self.model(
+            x=mel,
+            content_feature=content_feature,
             pitch=pitch,
-            duration=duration,
-            phone_id=phone_id,
-            ref_code=ref_code,
-            phone_mask=phone_mask,
-            mask=mask,
-            ref_mask=ref_mask,
+            x_ref=ref_mel,
+            x_mask=mask,
+            x_ref_mask=ref_mask,
         )
+        total_loss = 0.0
 
-        # pitch loss
-        pitch_loss = log_pitch_loss(prior_out["pitch_pred_log"], pitch, mask=mask)
-        total_loss += pitch_loss
-        train_losses["pitch_loss"] = pitch_loss
+        diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
+        total_loss += diff_loss_x0
+        train_losses["diff_loss_x0"] = diff_loss_x0
 
-        # duration loss
-        dur_loss = log_dur_loss(prior_out["dur_pred_log"], duration, mask=phone_mask)
-        total_loss += dur_loss
-        train_losses["dur_loss"] = dur_loss
-
-        x0 = self.model.module.code_to_latent(code)
-        if self.cfg.model.diffusion.diffusion_type == "diffusion":
-            # diff loss x0
-            diff_loss_x0 = diff_loss(diff_out["x0_pred"], x0, mask=mask)
-            total_loss += diff_loss_x0
-            train_losses["diff_loss_x0"] = diff_loss_x0
-
-            # diff loss noise
-            diff_loss_noise = diff_loss(
-                diff_out["noise_pred"], diff_out["noise"], mask=mask
-            )
-            total_loss += diff_loss_noise * self.cfg.train.diff_noise_loss_lambda
-            train_losses["diff_loss_noise"] = diff_loss_noise
-
-        elif self.cfg.model.diffusion.diffusion_type == "flow":
-            # diff flow matching loss
-            flow_gt = diff_out["noise"] - x0
-            diff_loss_flow = diff_loss(diff_out["flow_pred"], flow_gt, mask=mask)
-            total_loss += diff_loss_flow
-            train_losses["diff_loss_flow"] = diff_loss_flow
-
-        # diff loss ce
-
-        # (nq, B, T); (nq, B, T, 1024)
-        if self.cfg.train.diff_ce_loss_lambda > 0:
-            pred_indices, pred_dist = self.model.module.latent_to_code(
-                diff_out["x0_pred"], nq=code.shape[1]
-            )
-            gt_indices, _ = self.model.module.latent_to_code(x0, nq=code.shape[1])
-            diff_loss_ce = diff_ce_loss(pred_dist, gt_indices, mask=mask)
-            total_loss += diff_loss_ce * self.cfg.train.diff_ce_loss_lambda
-            train_losses["diff_loss_ce"] = diff_loss_ce
+        # diff loss noise
+        diff_loss_noise = diff_loss(
+            diff_out["noise_pred"], diff_out["noise"], mask=mask
+        )
+        total_loss += diff_loss_noise 
+        train_losses["diff_loss_noise"] = diff_loss_noise
 
         self.optimizer.zero_grad()
-        # total_loss.backward()
         self.accelerator.backward(total_loss)
         if self.accelerator.sync_gradients:
             self.accelerator.clip_grad_norm_(
@@ -480,107 +574,80 @@ class NS2Trainer(TTSTrainer):
         for item in train_losses:
             train_losses[item] = train_losses[item].item()
 
-        if self.cfg.train.diff_ce_loss_lambda > 0:
-            pred_indices_list = pred_indices.long().detach().cpu().numpy()
-            gt_indices_list = gt_indices.long().detach().cpu().numpy()
-            mask_list = batch["mask"].detach().cpu().numpy()
-
-            for i in range(pred_indices_list.shape[0]):
-                pred_acc = np.sum(
-                    (pred_indices_list[i] == gt_indices_list[i]) * mask_list
-                ) / np.sum(mask_list)
-                train_losses["pred_acc_{}".format(str(i))] = pred_acc
-
-        train_losses["batch_size"] = code.shape[0]
-        train_losses["max_frame_nums"] = np.max(
-            batch["frame_nums"].detach().cpu().numpy()
-        )
-
+        train_losses["batch_size"] = pitch.shape[0]
         return (total_loss.item(), train_losses, train_stats)
 
     @torch.inference_mode()
     def _valid_step(self, batch):
         valid_losses = {}
-        total_loss = 0
         valid_stats = {}
+        device = self.accelerator.device
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                batch[k] = v.to(device)
 
-        code = batch["code"]  # (B, 16, T)
-        pitch = batch["pitch"]  # (B, T)
-        duration = batch["duration"]  # (B, N)
-        phone_id = batch["phone_id"]  # (B, N)
-        ref_code = batch["ref_code"]  # (B, 16, T')
-        phone_mask = batch["phone_mask"]  # (B, N)
-        mask = batch["mask"]  # (B, T)
-        ref_mask = batch["ref_mask"]  # (B, T')
+        with torch.set_grad_enabled(False):
+            batch["pitch"] = self.extract_world_f0(batch["speech"])
+            pitch = (batch["pitch"] - batch["pitch"].mean(dim=1, keepdim=True)) / (
+                batch["pitch"].std(dim=1, keepdim=True) + 1e-6
+            )  
+            batch["pitch"] = pitch
+            speech = batch["speech"]
+            ref_speech = batch["ref_speech"]
+            mel = mel_spectrogram(
+                speech,
+                n_fft=1024,
+                num_mels=80,
+                sampling_rate=16000,
+                hop_size=200,
+                win_size=800,
+                fmin=0,
+                fmax=8000,
+            )  # (B, 80, T)
+            ref_mel = mel_spectrogram(
+                ref_speech,
+                n_fft=1024,
+                num_mels=80,
+                sampling_rate=16000,
+                hop_size=200,
+                win_size=800,
+                fmin=0,
+                fmax=8000,
+            )  # (B, 80, T')
+            mel = mel.transpose(1, 2)
+            ref_mel = ref_mel.transpose(1, 2)
 
-        diff_out, prior_out = self.model(
-            code=code,
-            pitch=pitch,
-            duration=duration,
-            phone_id=phone_id,
-            ref_code=ref_code,
-            phone_mask=phone_mask,
-            mask=mask,
-            ref_mask=ref_mask,
+            _, content_feature = self.w2v(speech)
+            pitch = batch["pitch"]
+            mask = batch["mask"]
+            ref_mask = batch["ref_mask"]
+            diff_out = self.model(
+                x=mel,
+                content_feature=content_feature,
+                pitch=pitch,
+                x_ref=ref_mel,
+                x_mask=mask,
+                x_ref_mask=ref_mask,
+            )
+        total_loss = 0.0
+
+        diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
+        total_loss += diff_loss_x0
+        valid_losses["diff_loss_x0"] = diff_loss_x0
+
+        # diff loss noise
+        diff_loss_noise = diff_loss(
+            diff_out["noise_pred"], diff_out["noise"], mask=mask
         )
+        total_loss += diff_loss_noise 
+        valid_losses["diff_loss_noise"] = diff_loss_noise
 
-        # pitch loss
-        pitch_loss = log_pitch_loss(prior_out["pitch_pred_log"], pitch, mask=mask)
-        total_loss += pitch_loss
-        valid_losses["pitch_loss"] = pitch_loss
 
-        # duration loss
-        dur_loss = log_dur_loss(prior_out["dur_pred_log"], duration, mask=phone_mask)
-        total_loss += dur_loss
-        valid_losses["dur_loss"] = dur_loss
-
-        x0 = self.model.module.code_to_latent(code)
-        if self.cfg.model.diffusion.diffusion_type == "diffusion":
-            # diff loss x0
-            diff_loss_x0 = diff_loss(diff_out["x0_pred"], x0, mask=mask)
-            total_loss += diff_loss_x0
-            valid_losses["diff_loss_x0"] = diff_loss_x0
-
-            # diff loss noise
-            diff_loss_noise = diff_loss(
-                diff_out["noise_pred"], diff_out["noise"], mask=mask
-            )
-            total_loss += diff_loss_noise * self.cfg.train.diff_noise_loss_lambda
-            valid_losses["diff_loss_noise"] = diff_loss_noise
-
-        elif self.cfg.model.diffusion.diffusion_type == "flow":
-            # diff flow matching loss
-            flow_gt = diff_out["noise"] - x0
-            diff_loss_flow = diff_loss(diff_out["flow_pred"], flow_gt, mask=mask)
-            total_loss += diff_loss_flow
-            valid_losses["diff_loss_flow"] = diff_loss_flow
-
-        # diff loss ce
-
-        # (nq, B, T); (nq, B, T, 1024)
-        if self.cfg.train.diff_ce_loss_lambda > 0:
-            pred_indices, pred_dist = self.model.module.latent_to_code(
-                diff_out["x0_pred"], nq=code.shape[1]
-            )
-            gt_indices, _ = self.model.module.latent_to_code(x0, nq=code.shape[1])
-            diff_loss_ce = diff_ce_loss(pred_dist, gt_indices, mask=mask)
-            total_loss += diff_loss_ce * self.cfg.train.diff_ce_loss_lambda
-            valid_losses["diff_loss_ce"] = diff_loss_ce
 
         for item in valid_losses:
             valid_losses[item] = valid_losses[item].item()
 
-        if self.cfg.train.diff_ce_loss_lambda > 0:
-            pred_indices_list = pred_indices.long().detach().cpu().numpy()
-            gt_indices_list = gt_indices.long().detach().cpu().numpy()
-            mask_list = batch["mask"].detach().cpu().numpy()
-
-            for i in range(pred_indices_list.shape[0]):
-                pred_acc = np.sum(
-                    (pred_indices_list[i] == gt_indices_list[i]) * mask_list
-                ) / np.sum(mask_list)
-                valid_losses["pred_acc_{}".format(str(i))] = pred_acc
-
+        valid_losses["batch_size"] = pitch.shape[0]
         return (total_loss.item(), valid_losses, valid_stats)
 
     @torch.inference_mode()
@@ -597,7 +664,16 @@ class NS2Trainer(TTSTrainer):
         epoch_sum_loss = 0.0
         epoch_losses = dict()
 
-        for batch in self.valid_dataloader:
+        for batch in tqdm(
+            self.valid_dataloader,
+            desc=f"Training Epoch {self.epoch}",
+            unit="batch",
+            colour="GREEN",
+            leave=False,
+            dynamic_ncols=True,
+            smoothing=0.04,
+            disable=not self.accelerator.is_main_process,
+        ):
             # Put the data to cuda device
             device = self.accelerator.device
             for k, v in batch.items():
@@ -622,32 +698,49 @@ class NS2Trainer(TTSTrainer):
                 self.model[key].train()
         else:
             self.model.train()
+        if isinstance(self.w2v, dict):
+            for key in self.w2v.keys():
+                self.w2v[key].eval()
+        else:
+            self.w2v.eval()
 
-        epoch_sum_loss: float = 0.0
-        epoch_losses: dict = {}
-        epoch_step: int = 0
+        epoch_sum_loss: float = 0.0 # total loss
+        epoch_losses: dict = {} # loss dict
+        epoch_step: int = 0 # step count
 
-        for batch in self.train_dataloader:
+        for batch in tqdm(
+            self.train_dataloader,
+            desc=f"Training Epoch {self.epoch}",
+            unit="batch",
+            colour="GREEN",
+            leave=False,
+            dynamic_ncols=True,
+            smoothing=0.04,
+            disable=not self.accelerator.is_main_process,
+        ):  
             # Put the data to cuda device
             device = self.accelerator.device
             for k, v in batch.items():
                 if isinstance(v, torch.Tensor):
                     batch[k] = v.to(device)
+            self.model = self.model.to(device)
+            self.w2v = self.w2v.to(device)
 
             # Do training step and BP
             with self.accelerator.accumulate(self.model):
                 total_loss, train_losses, training_stats = self._train_step(batch)
             self.batch_count += 1
 
+            
+
             # Update info for each step
             # TODO: step means BP counts or batch counts?
             if self.batch_count % self.cfg.train.gradient_accumulation_step == 0:
                 epoch_sum_loss = total_loss
-                for key, value in train_losses.items():
-                    epoch_losses[key] = value
-
+                self.current_loss = epoch_sum_loss
                 if isinstance(train_losses, dict):
                     for key, loss in train_losses.items():
+                        epoch_losses[key] = loss
                         self.accelerator.log(
                             {"Epoch/Train {} Loss".format(key): loss},
                             step=self.step,
@@ -660,14 +753,15 @@ class NS2Trainer(TTSTrainer):
                     == 0
                 ):
                     self.echo_log(train_losses, mode="Training")
-
                 self.step += 1
                 epoch_step += 1
 
+                self.save_checkpoint() # save checkpont
+                
         self.accelerator.wait_for_everyone()
 
         return epoch_sum_loss, epoch_losses
-
+    
     def train_loop(self):
         r"""Training loop. The public entry of training process."""
         # Wait everyone to prepare before we move on
@@ -684,7 +778,7 @@ class NS2Trainer(TTSTrainer):
                 self.logger.info("-" * 32)
                 self.logger.info("Epoch {}: ".format(self.epoch))
 
-            # Do training & validating epoch
+            # Do training 
             train_total_loss, train_losses = self._train_epoch()
             if isinstance(train_losses, dict):
                 for key, loss in train_losses.items():
@@ -715,72 +809,6 @@ class NS2Trainer(TTSTrainer):
                 },
                 step=self.epoch,
             )
-
-            self.accelerator.wait_for_everyone()
-            if isinstance(self.scheduler, dict):
-                for key in self.scheduler.keys():
-                    self.scheduler[key].step()
-            else:
-                self.scheduler.step()
-
-            # Check if hit save_checkpoint_stride and run_eval
-            run_eval = False
-            if self.accelerator.is_main_process:
-                save_checkpoint = False
-                hit_dix = []
-                for i, num in enumerate(self.save_checkpoint_stride):
-                    if self.epoch % num == 0:
-                        save_checkpoint = True
-                        hit_dix.append(i)
-                        run_eval |= self.run_eval[i]
-
-            self.accelerator.wait_for_everyone()
-            if self.accelerator.is_main_process and save_checkpoint:
-                path = os.path.join(
-                    self.checkpoint_dir,
-                    "epoch-{:04d}_step-{:07d}_loss-{:.6f}".format(
-                        self.epoch, self.step, train_total_loss
-                    ),
-                )
-                print("save state......")
-                self.accelerator.save_state(path)
-                print("finish saving state......")
-                json.dump(
-                    self.checkpoints_path,
-                    open(os.path.join(path, "ckpts.json"), "w"),
-                    ensure_ascii=False,
-                    indent=4,
-                )
-                # Remove old checkpoints
-                to_remove = []
-                for idx in hit_dix:
-                    self.checkpoints_path[idx].append(path)
-                    while len(self.checkpoints_path[idx]) > self.keep_last[idx]:
-                        to_remove.append((idx, self.checkpoints_path[idx].pop(0)))
-
-                # Search conflicts
-                total = set()
-                for i in self.checkpoints_path:
-                    total |= set(i)
-                do_remove = set()
-                for idx, path in to_remove[::-1]:
-                    if path in total:
-                        self.checkpoints_path[idx].insert(0, path)
-                    else:
-                        do_remove.add(path)
-
-                # Remove old checkpoints
-                for path in do_remove:
-                    shutil.rmtree(path, ignore_errors=True)
-                    if self.accelerator.is_main_process:
-                        self.logger.debug(f"Remove old checkpoint: {path}")
-
-            self.accelerator.wait_for_everyone()
-            if run_eval:
-                # TODO: run evaluation
-                pass
-
-            # Update info for each epoch
             self.epoch += 1
 
         # Finish training and save final checkpoint
@@ -795,3 +823,65 @@ class NS2Trainer(TTSTrainer):
                 )
             )
         self.accelerator.end_training()
+
+    def save_checkpoint(self):
+        self.accelerator.wait_for_everyone()
+
+        # Check if hit save_checkpoint_stride and run_eval
+        run_eval = False
+        if self.accelerator.is_main_process:
+            save_checkpoint = False
+            hit_idx = []
+            for i, num in enumerate(self.save_checkpoint_stride):
+                if self.step % num == 0: #save every save_checkpoint_stride
+                    save_checkpoint = True
+                    hit_idx.append(i)
+                    run_eval |= self.run_eval[i]
+
+        self.accelerator.wait_for_everyone()
+        if self.accelerator.is_main_process and save_checkpoint:
+            # 构造检查点文件的路径
+            checkpoint_filename = "epoch-{:04d}_step-{:07d}_loss-{:.6f}".format(
+                self.epoch, self.step, self.current_loss
+            )
+            path = os.path.join(self.checkpoint_dir, checkpoint_filename)
+
+            # 保存模型和优化器的状态
+            print("Saving state to {}...".format(path))
+            self.accelerator.save_state(path)
+            print("Finished saving state.")
+
+            # 更新检查点路径记录
+            json.dump(
+                self.checkpoints_path,
+                open(os.path.join(path, "ckpts.json"), "w"),
+                ensure_ascii=False,
+                indent=4,
+            )
+
+            # 移除旧的检查点
+            to_remove = []
+            for idx in hit_idx:
+                self.checkpoints_path[idx].append(path)
+                while len(self.checkpoints_path[idx]) > self.keep_last[idx]:
+                    to_remove.append((idx, self.checkpoints_path[idx].pop(0)))
+
+            # 查找需要删除的检查点
+            total = set()
+            for i in self.checkpoints_path:
+                total |= set(i)
+            do_remove = set()
+            for idx, path in to_remove[::-1]:
+                if path not in total:
+                    do_remove.add(path)
+
+            # 删除旧的检查点
+            for path in do_remove:
+                shutil.rmtree(path, ignore_errors=True)
+                print(f"Removed old checkpoint: {path}")
+
+        # 再次确保所有进程同步
+        self.accelerator.wait_for_everyone()
+
+
+

@@ -1,0 +1,396 @@
+from itertools import chain
+import logging
+import pickle
+import torch
+import pyworld as pw
+import numpy as np
+import soundfile as sf
+import os
+from hubert_kmeans import HubertWithKmeans
+from torchtts.nn.criterions import GANLoss
+from torchtts.nn.criterions import (
+    MultiResolutionSTFTLoss,
+    MultiResolutionMelSpectrogramLoss,
+    SpeakerLoss,
+)
+from torchtts.nn.metrics import Mean
+from torchtts.nn.optim.lr_schedulers import PowerLR, WarmupLR
+from torchtts.trainers.base_trainer import Trainer
+from torchtts.nn.criterions.duration_loss import DurationPredictorLoss
+from torch.optim import Adam
+from einops import rearrange
+
+from torchaudio.functional import pitch_shift
+from librosa.filters import mel as librosa_mel_fn
+
+logger = logging.getLogger(__name__)
+
+import torch
+import torch.nn as nn
+import numpy as np
+import torch.nn.functional as F
+
+
+def print_log(log):
+    print(log)
+
+
+def log_dur_loss(dur_pred_log, dur_target, mask, loss_type="l1"):
+    dur_target_log = torch.log(1 + dur_target)
+    if loss_type == "l1":
+        loss = F.l1_loss(
+            dur_pred_log, dur_target_log, reduction="none"
+        ).float() * mask.to(dur_target.dtype)
+    elif loss_type == "l2":
+        loss = F.mse_loss(
+            dur_pred_log, dur_target_log, reduction="none"
+        ).float() * mask.to(dur_target.dtype)
+    else:
+        raise NotImplementedError()
+    loss = loss.sum() / (mask.to(dur_target.dtype).sum())
+    return loss
+
+
+def log_pitch_loss(pitch_pred_log, pitch_target, mask, loss_type="l1"):
+    # pitch_target_log = torch.log(pitch_target)
+    pitch_target_log = torch.log(1 + pitch_target)
+    if loss_type == "l1":
+        loss = F.l1_loss(
+            pitch_pred_log, pitch_target_log, reduction="none"
+        ).float() * mask.to(pitch_target.dtype)
+    elif loss_type == "l2":
+        loss = F.mse_loss(
+            pitch_pred_log, pitch_target_log, reduction="none"
+        ).float() * mask.to(pitch_target.dtype)
+    else:
+        raise NotImplementedError()
+    loss = loss.sum() / (mask.to(pitch_target.dtype).sum() + 1e-8)
+    return loss
+
+
+def diff_loss(pred, target, mask, loss_type="l1"):
+    # pred: (B, T, d)
+    # target: (B, T, d)
+    # mask: (B, T)
+    if loss_type == "l1":
+        loss = F.l1_loss(pred, target, reduction="none").float() * (
+            mask.to(pred.dtype).unsqueeze(-1)
+        )
+    elif loss_type == "l2":
+        loss = F.mse_loss(pred, target, reduction="none").float() * (
+            mask.to(pred.dtype).unsqueeze(-1)
+        )
+    else:
+        raise NotImplementedError()
+    loss = (torch.mean(loss, dim=-1)).sum() / (mask.to(pred.dtype).sum())
+    return loss
+
+
+def dynamic_range_compression(x, C=1, clip_val=1e-5):
+    return np.log(np.clip(x, a_min=clip_val, a_max=None) * C)
+
+
+def dynamic_range_decompression(x, C=1):
+    return np.exp(x) / C
+
+
+def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
+    return torch.log(torch.clamp(x, min=clip_val) * C)
+
+
+def dynamic_range_decompression_torch(x, C=1):
+    return torch.exp(x) / C
+
+
+def spectral_normalize_torch(magnitudes):
+    output = dynamic_range_compression_torch(magnitudes)
+    return output
+
+
+def spectral_de_normalize_torch(magnitudes):
+    output = dynamic_range_decompression_torch(magnitudes)
+    return output
+
+
+mel_basis = {}
+hann_window = {}
+init_mel_and_hann = False
+
+
+def mel_spectrogram(
+    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
+):
+    if torch.min(y) < -1.0:
+        print("min value is ", torch.min(y))
+    if torch.max(y) > 1.0:
+        print("max value is ", torch.max(y))
+
+    global mel_basis, hann_window, init_mel_and_hann
+    if not init_mel_and_hann:
+        mel = librosa_mel_fn(
+            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
+        )
+        mel_basis[str(fmax) + "_" + str(y.device)] = (
+            torch.from_numpy(mel).float().to(y.device)
+        )
+        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+        print(mel_basis)
+        init_mel_and_hann = True
+
+    y = torch.nn.functional.pad(
+        y.unsqueeze(1),
+        (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
+        mode="reflect",
+    )
+    y = y.squeeze(1)
+
+    # complex tensor as default, then use view_as_real for future pytorch compatibility
+    spec = torch.stft(
+        y,
+        n_fft,
+        hop_length=hop_size,
+        win_length=win_size,
+        window=hann_window[str(y.device)],
+        center=center,
+        pad_mode="reflect",
+        normalized=False,
+        onesided=True,
+        return_complex=True,
+    )
+    spec = torch.view_as_real(spec)
+
+    spec = torch.sqrt(spec.pow(2).sum(-1) + (1e-9))
+
+    spec = torch.matmul(mel_basis[str(fmax) + "_" + str(y.device)], spec)
+    spec = spectral_normalize_torch(spec)
+
+    return spec
+
+
+def load_checkpoint(filepath, device):
+    assert os.path.isfile(filepath)
+    print("Loading '{}'".format(filepath))
+    checkpoint_dict = torch.load(filepath, map_location=device)
+    print("Complete.")
+    return checkpoint_dict
+
+
+class NS2Trainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # self.w2v = Wav2vec2()
+        # self.w2v = self.w2v.to("cuda")f
+
+        
+
+        self.w2v = HubertWithKmeans(
+            checkpoint_path="/blob/v-yuancwang/amphion_ns2/mhubert_base_vp_en_es_fr_it3.pt",
+            kmeans_path="/blob/v-yuancwang/amphion_ns2/mhubert_base_vp_en_es_fr_it3_L11_km1000.bin",
+        )
+        self.w2v = self.w2v.to("cuda")
+
+    def interpolate(self, f0):
+        uv = f0 == 0
+        if len(f0[~uv]) > 0:
+            # interpolate the unvoiced f0
+            f0[uv] = np.interp(np.where(uv)[0], np.where(~uv)[0], f0[~uv])
+            uv = uv.astype("float")
+            uv = np.min(np.array([uv[:-2], uv[1:-1], uv[2:]]), axis=0)
+            uv = np.pad(uv, (1, 1))
+        return f0, uv
+
+    def extract_world_f0(self, speech):
+        audio = speech.cpu().numpy()
+        f0s = []
+        for i in range(audio.shape[0]):
+            wav = audio[i]
+            frame_num = len(wav) // 200
+            f0, t = pw.dio(wav.astype(np.float64), 16000, frame_period=12.5)
+            f0 = pw.stonemask(wav.astype(np.float64), f0, t, 16000)
+            f0, _ = self.interpolate(f0)
+            f0 = torch.from_numpy(f0).to(speech.device)
+            f0s.append(f0[:frame_num])
+        f0s = torch.stack(f0s, dim=0).float()
+        return f0s
+
+    def train_step(self, batch, acc_step=0):
+        batch["pitch"] = self.extract_world_f0(batch["speech"])
+        batch["pitch"] = (batch["pitch"] - batch["pitch"].mean(dim=1, keepdim=True)) / (
+            batch["pitch"].std(dim=1, keepdim=True) + 1e-6
+        )  # 1. interpolate 2. normlized pitch
+
+        with self.engine.context():
+            with torch.no_grad():
+                speech = batch["speech"]
+                ref_speech = batch["ref_speech"]
+
+                mel = mel_spectrogram(
+                    speech,
+                    n_fft=1024,
+                    num_mels=80,
+                    sampling_rate=16000,
+                    hop_size=200,
+                    win_size=800,
+                    fmin=0,
+                    fmax=8000,
+                )  # (B, 80, T)
+                ref_mel = mel_spectrogram(
+                    ref_speech,
+                    n_fft=1024,
+                    num_mels=80,
+                    sampling_rate=16000,
+                    hop_size=200,
+                    win_size=800,
+                    fmin=0,
+                    fmax=8000,
+                )  # (B, 80, T')
+
+                mel = mel.transpose(1, 2)
+                ref_mel = ref_mel.transpose(1, 2)
+
+                n_steps = np.random.choice(
+                    a=[-4, -3, -2, -1, 0, 1, 2, 3, 4],
+                    p=[
+                        1 / 12,
+                        1 / 12,
+                        1 / 12,
+                        1 / 12,
+                        4 / 12,
+                        1 / 12,
+                        1 / 12,
+                        1 / 12,
+                        1 / 12,
+                    ],
+                )
+
+                if self._config["perturbe_content_feature"]:
+                    speech_perturbe = pitch_shift(speech, 16000, n_steps)
+                else:
+                    speech_perturbe = speech
+                #print shape speech
+                
+                # content_feature = self.w2v(speech_perturbe)
+                print("speech_perturbe shape:", speech_perturbe.shape)
+                content_feature = self.w2v(speech_perturbe)
+                print("content_feature shape:", content_feature.shape)
+                print("ref_mel shape:", pitch.shape)
+                
+
+                del speech
+                del ref_speech
+                del speech_perturbe
+
+            if self._config["norm_mel"]:
+                mel = -1.0 + 2.0 * (mel - self._config["norm_mel_min"]) / (
+                    self._config["norm_mel_max"] - self._config["norm_mel_min"]
+                )
+                ref_mel = -1.0 + 2.0 * (ref_mel - self._config["norm_mel_min"]) / (
+                    self._config["norm_mel_max"] - self._config["norm_mel_min"]
+                )
+
+            # print(mel.shape, ref_mel.shape)
+            pitch = batch["pitch"]
+            # print(pitch.shape)
+            duration = batch["duration"]
+            # print(duration.shape)
+            phone_id = batch["phone_id"]
+            # print(phone_id.shape)
+            # phone_id_mask = batch["phone_id_mask"]
+            # print(phone_id_mask.shape)
+            mask = batch["mask"]
+            # print(mask.shape)
+            ref_mask = batch["ref_mask"]
+            # print(ref_mask.shape)
+
+            diff_out = self.model["generator"](
+                x=mel,
+                content_feature=content_feature,
+                pitch=pitch,
+                x_ref=ref_mel,
+                x_mask=mask,
+                x_ref_mask=ref_mask,
+            )
+
+            gen_loss = 0.0
+
+
+            diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
+            gen_loss += diff_loss_x0
+            self.metrics["diff_loss_x0"].update_state(diff_loss_x0)
+
+            # diff loss noise
+            diff_loss_noise = diff_loss(
+                diff_out["noise_pred"], diff_out["noise"], mask=mask
+            )
+            gen_loss += diff_loss_noise
+            self.metrics["diff_loss_noise"].update_state(diff_loss_noise)
+
+            self.engine.optimize_step(
+                loss=gen_loss,
+                optimizer=self.optimizers["gen"],
+                lr_scheduler=self.lr_schedulers["gen"],
+                current_step=acc_step,
+                grad_accumulate=self.gradient_accumulate,
+                donot_optimize=True if self.gradient_accumulate > 1 else False,
+                grad_norm=2e3,
+            )
+
+            if self.gradient_accumulate > 1 and acc_step == 0:
+                self.engine.optimize_gradients(optimizer=self.optimizers["gen"])
+
+            # TODO: this is a bug for fairseq
+            stats = {k: m.result() for k, m in self.metrics.items()}
+            if self.global_steps % 10 == 0 and str(gen_loss.device) == "cuda:0":
+                log = [f"epoch = {self.epochs + 1}, step = {self.global_steps}"]
+                for key, value in stats.items():
+                    log.append(f"{key} = {value:.4g}")
+                print_log(", ".join(log))
+            return stats
+
+    def configure_optimizers(self):
+        gen_params = self.model["generator"].parameters()
+        logger.info(
+            "generator parameters count: {} M".format(
+                sum(
+                    p.numel()
+                    for p in self.model["generator"].parameters()
+                    if p.requires_grad
+                )
+                / 1e6
+            )
+        )
+
+        return {
+            "gen": Adam(gen_params, **self._config["gen_optim_params"]),
+        }
+
+    def configure_lr_schedulers(self):
+        """
+        return {
+            'gen': PowerLR(self.optimizers['gen'],
+                           **self._config["gen_schedule_params"]),
+        }
+        """
+        return {
+            "gen": WarmupLR(
+                self.optimizers["gen"], **self._config["gen_schedule_params"]
+            )
+        }
+
+    def configure_criteria(self):
+        criteria = {
+            "l1_loss": torch.nn.L1Loss(reduction="mean"),
+            "l2_loss": torch.nn.MSELoss(reduction="mean"),
+        }
+        return criteria
+
+    def configure_metrics(self):
+        metrics = {
+            "pitch_loss": Mean(),
+            "dur_loss": Mean(),
+            "diff_loss_x0": Mean(),
+            "diff_loss_noise": Mean(),
+        }
+
+        return metrics

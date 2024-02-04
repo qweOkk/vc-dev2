@@ -1,6 +1,6 @@
 {
     "base_config": "config/tts.json",
-    "model_type": "NaturalSpeech2",
+    "model_type": "UniAmphion",
     "dataset": ["libritts", "librilight"],
     "preprocess": {
         "use_mel": false,

@@ -8,7 +8,7 @@ from tqdm import tqdm
 import os
 import torchaudio
 import torch
-
+import textgrid
 
 from utils.mfa_prepare import (
     process_wav_files,
@@ -16,7 +16,7 @@ from utils.mfa_prepare import (
     filter_wav_files_by_length,
 )
 from utils.cut_by_vad import cut_segments
-from utils.whisper_transcription import asr_main
+from utils.whisper_transcription import asr_main, get_txt_files
 from utils.util import has_existed
 
 import subprocess
@@ -51,10 +51,30 @@ def get_speakers_from_directory(directory):
     ]
 
 
-def split_dataset_by_speaker(base_dir, train_ratio=0.8, dev_ratio=0.1):
-    train_dir = os.path.join(base_dir, "train")
-    dev_dir = os.path.join(base_dir, "dev")
-    eval_dir = os.path.join(base_dir, "eval")
+def get_duration_phone_start_end(textgrid_path):
+        tg = textgrid.TextGrid.fromFile(textgrid_path)
+        phone_tier = tg[0]
+        durations = []
+        phones = []
+        starts = []
+        ends = []
+        for interval in phone_tier:
+            start = interval.minTime
+            end = interval.maxTime
+            phone = interval.mark
+            duration = end - start
+            phones.append(phone)
+            durations.append(duration)
+            starts.append(start)
+            ends.append(end)
+        return durations, phones, starts, ends
+    
+
+
+def split_dataset_by_speaker(base_dir, target_dir, train_ratio=0.8, dev_ratio=0.1):
+    train_dir = os.path.join(target_dir, "train")
+    dev_dir = os.path.join(target_dir, "dev")
+    eval_dir = os.path.join(target_dir, "eval")
 
     # Check if dataset is already split
     if has_existed(train_dir) or has_existed(dev_dir) or has_existed(eval_dir):
@@ -91,7 +111,7 @@ def split_dataset_by_speaker(base_dir, train_ratio=0.8, dev_ratio=0.1):
     # Function to move directories
     def move_speakers(speakers, target_dir):
         for speaker in speakers:
-            shutil.move(
+            shutil.copy(
                 os.path.join(base_dir, speaker), os.path.join(target_dir, speaker)
             )
 
@@ -117,6 +137,14 @@ def save_meta_data(save_dir, processed_dir, distribution2speakers2utts, speakers
     test_output_file = os.path.join(save_dir, "eval.json")
     singer_dict_file = os.path.join(save_dir, "singers.json")
     utt2singer_file = os.path.join(save_dir, "utt2singer")
+
+    # Create directories for 'durations' and 'phones' inside the save_dir
+    durations_dir = os.path.join(save_dir, 'durations')
+    phones_dir = os.path.join(save_dir, 'phones')
+
+    os.makedirs(durations_dir, exist_ok=True)
+    os.makedirs(phones_dir, exist_ok=True)
+
     utt2singer = open(utt2singer_file, "w")
     if has_existed(train_output_file):
         print("Metadata already exists. Skipping...")
@@ -138,30 +166,46 @@ def save_meta_data(save_dir, processed_dir, distribution2speakers2utts, speakers
     for distribution, speakers2utts in tqdm(distribution2speakers2utts.items()):
         for speaker, utts in tqdm(speakers2utts.items()):
             for chosen_uid in utts:
+                uid = "{}#{}#{}".format(distribution, speaker, chosen_uid)
                 res = {
                     "Dataset": "librilight",
                     "Singer": speaker,
-                    "Uid": "{}#{}#{}".format(distribution, speaker, chosen_uid),
+                    "Uid": uid,
                 }
                 res["Path"] = "{}/{}/{}.wav".format(distribution, speaker, chosen_uid)
                 res["Path"] = os.path.join(processed_dir, res["Path"])
-                assert os.path.exists(res["Path"])
 
+                textgrid_file_path = os.path.join(
+                    processed_dir,
+                    distribution,
+                    speaker,
+                    chosen_uid + ".TextGrid",
+                )
                 text_file_path = os.path.join(
                     processed_dir,
                     distribution,
                     speaker,
                     chosen_uid + ".txt",
                 )
+
+                assert os.path.exists(res["Path"])
+                assert os.path.exists(textgrid_file_path)
+                assert os.path.exists(text_file_path)
+
                 with open(text_file_path, "r") as f:
                     lines = f.readlines()
                     assert len(lines) == 1
                     text = lines[0].strip()
                     res["Text"] = text
 
+                durations, phones, starts, ends = get_duration_phone_start_end(textgrid_file_path)
+                res["Durations"] = durations
+                res["Phones"] = phones
+                res["Starts"] = starts
+                res["Ends"] = ends
                 waveform, sample_rate = torchaudio.load(res["Path"])
                 duration = waveform.size(-1) / sample_rate
-                res["Duration"] = duration
+                res["whole_length"] = duration
 
                 if "train" in distribution:
                     res["index"] = train_index_count
@@ -213,7 +257,7 @@ def main(output_path, dataset_path, cfg):
     max_length = cfg.max_length  # max length of utterance in seconds
 
     # MFA files
-    mfa_config_path = cfg.mfa_config_path  # path to mfa config file
+    # mfa_config_path = cfg.mfa_config_path  # path to mfa config file
     mfa_dict_path = cfg.mfa_dict_path  # path to mfa dict file
     mfa_model_path = cfg.mfa_model_path  # path to mfa model file
 
@@ -221,7 +265,7 @@ def main(output_path, dataset_path, cfg):
     if (
         not os.path.exists(mfa_dict_path)
         or not os.path.exists(mfa_model_path)
-        or not os.path.exists(mfa_config_path)
+        # or not os.path.exists(mfa_config_path)
     ):
         raise Exception("MFA files not found.")
 
@@ -236,7 +280,10 @@ def main(output_path, dataset_path, cfg):
             and d in ["tiny", "small", "medium", "large"]
         )
     ]
+    used_subsets = cfg.used_subsets
     print("Found subsets:", subsets)
+    subsets = [s for s in subsets if s in used_subsets]
+    print("Using subsets:", used_subsets)
 
     if len(subsets) == 0:
         print("No subsets found. Exiting...")
@@ -247,7 +294,7 @@ def main(output_path, dataset_path, cfg):
         print("Pre-proccessing Libri-light subset:", subset)
         raw_dir = f"{dataset_path}/{subset}"
         save_dir = f"{output_path}/{subset}"
-        processed_dir = f"{dataset_path}/processed/{subset}"
+        processed_dir = f"{output_path}/processed/{subset}"
         os.makedirs(processed_dir, exist_ok=True)
         os.makedirs(save_dir, exist_ok=True)
 
@@ -256,7 +303,12 @@ def main(output_path, dataset_path, cfg):
         print("Step 1: Segmentation")
         print("Cutting audio files...")
 
-        cut_segments(raw_dir, processed_dir, cut_length, n_cpus)
+        wav_num = len(get_wav_files(processed_dir))
+        
+        if wav_num == 0:
+            cut_segments(raw_dir, processed_dir, cut_length, n_cpus)
+        else:
+            print("Audio files already cut. Skipping...")
 
         # Steps 2 & 3: Filter and Preprocess
         print("-" * 10)
@@ -265,62 +317,66 @@ def main(output_path, dataset_path, cfg):
 
         wav_files = get_wav_files(processed_dir)
         filtered_wav_files = filter_wav_files_by_length(wav_files, max_length)
-        process_wav_files(filtered_wav_files, processed_dir, n_cpus)
-
+        # if number of wav files in processed_dir == filtered_wav_files, filtering is not needed
+        if len(wav_files) != len(filtered_wav_files):
+            process_wav_files(filtered_wav_files, processed_dir, n_cpus)
+        else:
+            print("Audio files already filtered. Skipping...")
+        
         # Step 4 & 5: Transcription & Text-preprocess
         print("-" * 10)
         print("Step 4 & 5: Transcription & Text-preprocess")
         print("Transcribing audio files...")
 
         n_gpus = min(n_gpus, torch.cuda.device_count())
-        asr_main(processed_dir, n_gpus, model_id)
+        # number of transcripted txt
+        txt_files = get_txt_files(processed_dir)
+        #if number of wav files in processed_dir == number of txt files in processed_dir, transcription is not needed
+        if len(wav_files) != len(txt_files):
+            asr_main(processed_dir, n_gpus, model_id)
+        else:
+            print("Audio files already transcribed. Skipping...")
 
         # Step 6: MFA Align
         print("-" * 10)
         print("Step 6: MFA Align")
         print("Aligning audio files...")
 
-        command = [
-            "mfa",
-            "align",
-            "-v",
-            "-j",
-            str(n_cpus),
-            "-c",
-            mfa_config_path,
-            processed_dir,
-            mfa_dict_path,
-            mfa_model_path,
-            processed_dir,
-            "--output_format",
-            "long_textgrid",
-            "--clean",
-            "--overwrite",
-        ]
-        subprocess.run(command, text=True)
+        align_command = f"""mfa align --output_format long_textgrid --clean --overwrite -v -j {str(n_cpus)} {processed_dir} {mfa_dict_path} {mfa_model_path} {processed_dir}"""
+        process = subprocess.Popen(align_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-        # Step 7: train/dev/eval split
-        print("-" * 10)
-        print("Step 7: train/dev/eval split")
-        print("Splitting dataset by speaker...")
+        while True:
+            output = process.stdout.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                print(output.strip())
+        rc = process.poll()
 
-        speakers = split_dataset_by_speaker(processed_dir)
+        print("Aligning done!")
 
-        # Step 8: Statistics
-        print("-" * 10)
-        print("Step 8: Statistics")
-        print("Calculating statistics...")
+        # # Step 7: train/dev/eval split
+        # print("-" * 10)
+        # print("Step 7: train/dev/eval split")
+        # print("Splitting dataset by speaker...")
 
-        distribution2speakers2utts = librilight_statistics(processed_dir)
+        # speakers = split_dataset_by_speaker(processed_dir, save_dir)
 
-        # Step 9: Save metadata
-        print("-" * 10)
-        print("Step 9: Save metadata")
-        print("Preparing Metadata for Librilight...")
+        # # Step 8: Statistics
+        # print("-" * 10)
+        # print("Step 8: Statistics")
+        # print("Calculating statistics...")
 
-        save_meta_data(save_dir, processed_dir, distribution2speakers2utts, speakers)
-        print("Preprocessing subset", subset, "done!")
-        print("-" * 10)
+        # distribution2speakers2utts = librilight_statistics(save_dir)
+
+        # # Step 9: Save metadata
+        # print("-" * 10)
+        # print("Step 9: Save metadata")
+        # print("Preparing Metadata for Librilight...")
+
+        # save_meta_data(save_dir, processed_dir, distribution2speakers2utts, speakers)
+        # print("Preprocessing subset", subset, "done!")
+        # print("-" * 10)
 
 
 if __name__ == "__main__":

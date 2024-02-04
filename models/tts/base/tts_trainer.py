@@ -100,9 +100,9 @@ class TTSTrainer(BaseTrainer):
             end = time.monotonic_ns()
             self.logger.info(f"Building dataset done in {(end - start) / 1e6:.2f}ms")
 
-        # save phone table to exp dir. Should be done before building model due to loading phone table in model
-        if cfg.preprocess.use_phone and cfg.preprocess.phone_extractor != "lexicon":
-            self._save_phone_symbols_file_to_exp_path()
+        # # save phone table to exp dir. Should be done before building model due to loading phone table in model
+        # if cfg.preprocess.use_phone and cfg.preprocess.phone_extractor != "lexicon":
+        #     self._save_phone_symbols_file_to_exp_path()
 
         # setup model
         with self.accelerator.main_process_first():

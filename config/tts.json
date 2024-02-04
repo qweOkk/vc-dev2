@@ -16,9 +16,17 @@
     // Directory names of processed data or extracted features
     "phone_dir": "phones",
     "use_phone": true,
+    // Used for data preprocessing
+    "n_cpus": 8,
+    "n_gpus": 8,
+    "cut_length": 10,
+    "max_length": 20,
+    "whisper_model_id":"/mnt/data3/hehaorui/ckpt/distilled-small.en",
+    // MFA files
+    "mfa_dict_path": "/mnt/data3/hehaorui/mfa/english_mfa/mfa_dict.dict",
+    "mfa_model_path": "/mnt/data3/hehaorui/mfa/english_mfa/model",
   },
   "model": {
       "text_token_num": 512,
   }
-
 }

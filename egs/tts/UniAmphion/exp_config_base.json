@@ -1,7 +1,9 @@
 {
-    "base_config": "config/tts.json",
-    "model_type": "NaturalSpeech2",
-    "dataset": ["libritts", "librilight"],
+    "base_config": "config/ns2.json",
+    "model_type": "UniAmphion",
+    "dataset": [
+        "librilight"
+    ],
     "preprocess": {
         "use_mel": false,
         "use_code": true,
@@ -12,11 +14,14 @@
         "use_len": true,
         "use_cross_reference": true,
         "train_file": "train.json",
+        "valid_file": "test.json",
         "melspec_dir": "mel",
         "code_dir": "code",
         "pitch_dir": "pitch",
         "duration_dir": "duration",
-        "clip_mode": "start"
+        "metadata_dir": "metadata",
+        "read_metadata": true,
+        "clip_mode": "mid"
     },
     "model": {
         "latent_dim": 128,
@@ -68,7 +73,8 @@
             "beta_max": 20,
             "sigma": 1.0,
             "noise_factor": 1.0,
-            "ode_solver": "euler"
+            "ode_solver": "euler",
+            "diffusion_type": "diffusion"
         },
         "prompt_encoder": {
             "encoder_layer": 6,
@@ -83,6 +89,30 @@
             "query_token_num": 32,
             "hidden_size": 512,
             "head_num": 8
-        }
+        },
+        "inference_step": 500
+    },
+    "train": {
+        "use_dynamic_batchsize": true,
+        "max_tokens": 7500,
+        "max_sentences": 32,
+        "lr_warmup_steps": 5000,
+        "lr_scheduler": "cosine",
+        "num_train_steps": 800000,
+        "adam": {
+            "lr": 7.5e-5
+        },
+        "diff_ce_loss_lambda": 0.5,
+        "diff_noise_loss_lambda": 1.0,
+        "ddp": false,
+        "random_seed": 114,
+        "batch_size": 32,
+        "epochs": 5000,
+        "max_steps": 1000000,
+        "total_training_steps": 800000,
+        "save_summary_steps": 500,
+        "save_checkpoints_steps": 2000,
+        "valid_interval": 2000,
+        "keep_checkpoint_max": 100
     }
 }

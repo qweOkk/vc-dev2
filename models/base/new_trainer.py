@@ -226,6 +226,26 @@ class BaseTrainer(object):
         r"""To save some auxiliary states when saving model's ckpt"""
         pass
 
+    
+    def echo_log(self, losses, mode="Training"):
+        message = [
+            "{} - Epoch {} Step {}: [{:.3f} s/step]".format(
+                mode, self.epoch + 1, self.step, self.time_window.average
+            )
+        ]
+
+        for key in sorted(losses.keys()):
+            if isinstance(losses[key], dict):
+                for k, v in losses[key].items():
+                    message.append(
+                        str(k).split("/")[-1] + "=" + str(round(float(v), 5))
+                    )
+            else:
+                message.append(
+                    str(key).split("/")[-1] + "=" + str(round(float(losses[key]), 5))
+                )
+        self.logger.info(", ".join(message))
+
     ### Abstract methods end ###
 
     ### THIS IS MAIN ENTRY ###
