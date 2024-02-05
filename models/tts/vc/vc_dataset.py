@@ -31,7 +31,7 @@ def process_files(files):
 
     if len(files_to_process) != 0:
         # Use multiprocessing Pool to process files in parallel
-        with Pool(processes=os.cpu_count()) as pool:
+        with Pool(processes=16) as pool:
             for file, num_frames in tqdm(pool.imap_unordered(get_metadata, files_to_process), total=len(files_to_process)):
                 metadata_cache[file] = num_frames
         
