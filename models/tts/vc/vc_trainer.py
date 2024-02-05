@@ -106,6 +106,29 @@ def mel_spectrogram(
 
     return spec
 
+def interpolate(f0):
+    uv = f0 == 0
+    if len(f0[~uv]) > 0:
+        # interpolate the unvoiced f0
+        f0[uv] = np.interp(np.where(uv)[0], np.where(~uv)[0], f0[~uv])
+        uv = uv.astype("float")
+        uv = np.min(np.array([uv[:-2], uv[1:-1], uv[2:]]), axis=0)
+        uv = np.pad(uv, (1, 1))
+    return f0, uv
+
+def extract_world_f0(speech):
+    audio = speech.cpu().numpy()
+    f0s = []
+    for i in range(audio.shape[0]):
+        wav = audio[i]
+        frame_num = len(wav) // 200
+        f0, t = pw.dio(wav.astype(np.float64), 16000, frame_period=12.5)
+        f0 = pw.stonemask(wav.astype(np.float64), f0, t, 16000)
+        f0, _ = interpolate(f0)
+        f0 = torch.from_numpy(f0).to(speech.device)
+        f0s.append(f0[:frame_num])
+    f0s = torch.stack(f0s, dim=0).float()
+    return f0s
 
 class VCTrainer(TTSTrainer):
     def __init__(self, args, cfg):
@@ -471,30 +494,6 @@ class VCTrainer(TTSTrainer):
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.scheduler.load_state_dict(checkpoint["scheduler"])
 
-    def interpolate(self, f0):
-        uv = f0 == 0
-        if len(f0[~uv]) > 0:
-            # interpolate the unvoiced f0
-            f0[uv] = np.interp(np.where(uv)[0], np.where(~uv)[0], f0[~uv])
-            uv = uv.astype("float")
-            uv = np.min(np.array([uv[:-2], uv[1:-1], uv[2:]]), axis=0)
-            uv = np.pad(uv, (1, 1))
-        return f0, uv
-
-    def extract_world_f0(self, speech):
-        audio = speech.cpu().numpy()
-        f0s = []
-        for i in range(audio.shape[0]):
-            wav = audio[i]
-            frame_num = len(wav) // 200
-            f0, t = pw.dio(wav.astype(np.float64), 16000, frame_period=12.5)
-            f0 = pw.stonemask(wav.astype(np.float64), f0, t, 16000)
-            f0, _ = self.interpolate(f0)
-            f0 = torch.from_numpy(f0).to(speech.device)
-            f0s.append(f0[:frame_num])
-        f0s = torch.stack(f0s, dim=0).float()
-        return f0s
-
     def _train_step(self, batch):
         train_losses = {}
         train_stats = {}
@@ -506,7 +505,7 @@ class VCTrainer(TTSTrainer):
         speech = batch["speech"]
         ref_speech = batch["ref_speech"]
         with torch.set_grad_enabled(False):
-            batch["pitch"] = self.extract_world_f0(batch["speech"])
+            batch["pitch"] = extract_world_f0(batch["speech"])
             pitch = (batch["pitch"] - batch["pitch"].mean(dim=1, keepdim=True)) / (
                 batch["pitch"].std(dim=1, keepdim=True) + 1e-6
             )  
@@ -587,7 +586,7 @@ class VCTrainer(TTSTrainer):
                 batch[k] = v.to(device)
 
         with torch.set_grad_enabled(False):
-            batch["pitch"] = self.extract_world_f0(batch["speech"])
+            batch["pitch"] = extract_world_f0(batch["speech"])
             pitch = (batch["pitch"] - batch["pitch"].mean(dim=1, keepdim=True)) / (
                 batch["pitch"].std(dim=1, keepdim=True) + 1e-6
             )  

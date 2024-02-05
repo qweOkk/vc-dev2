@@ -3,7 +3,6 @@ import torch
 from models.tts.vc.vc_trainer import VCTrainer
 from utils.util import load_config
 
-
 def build_trainer(args, cfg):
     supported_trainer = {
         "VC": VCTrainer,
