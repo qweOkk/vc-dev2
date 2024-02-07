@@ -29,6 +29,10 @@ from models.tts.vc.ns2_uniamphion import UniAmphionVC
 from models.tts.vc.vc_dataset import  VCCollator, VCDataset, batch_by_size
 from models.tts.vc.hubert_kmeans import HubertWithKmeans
 
+mel_basis = {}
+hann_window = {}
+init_mel_and_hann = False
+
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
     return torch.log(torch.clamp(x, min=clip_val) * C)
 
@@ -49,22 +53,13 @@ def diff_loss(pred, target, mask, loss_type="l1"):
     loss = (torch.mean(loss, dim=-1)).sum() / (mask.to(pred.dtype).sum())
     return loss
 
-
 def spectral_normalize_torch(magnitudes):
     output = dynamic_range_compression_torch(magnitudes)
     return output
 
-mel_basis = {}
-hann_window = {}
-init_mel_and_hann = False
-
 def mel_spectrogram(
     y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
 ):
-    if torch.min(y) < -1.0:
-        print("min value is ", torch.min(y))
-    if torch.max(y) > 1.0:
-        print("max value is ", torch.max(y))
 
     global mel_basis, hann_window, init_mel_and_hann
     if not init_mel_and_hann:
@@ -139,7 +134,8 @@ class VCTrainer(TTSTrainer):
         self._init_accelerator()
         self.accelerator.wait_for_everyone()
         with self.accelerator.main_process_first():
-            self.logger = get_logger(args.exp_name, log_level="INFO")
+            if self.accelerator.is_main_process:
+                self.logger = get_logger(args.exp_name, log_level="INFO")
         self.time_window = ValueWindow(50)
         if self.accelerator.is_main_process:
             self.logger.info("=" * 56)
@@ -194,7 +190,7 @@ class VCTrainer(TTSTrainer):
                     f"Setting random seed done in {(end - start) / 1e6:.2f}ms"
                 )
                 self.logger.debug(f"Random seed: {self.cfg.train.random_seed}")
-
+ 
         # setup data_loader
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
@@ -208,6 +204,7 @@ class VCTrainer(TTSTrainer):
                 )
 
         # setup model
+            
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building model...")
@@ -236,8 +233,9 @@ class VCTrainer(TTSTrainer):
 
         # accelerate prepare
         if not self.cfg.train.use_dynamic_batchsize:
-            if self.accelerator.is_main_process:
-                self.logger.info("Initializing accelerate...")
+            with self.accelerator.main_process_first():
+                if self.accelerator.is_main_process:
+                    self.logger.info("Initializing accelerate...")
             start = time.monotonic_ns()
             (
                 self.train_dataloader,
@@ -332,16 +330,22 @@ class VCTrainer(TTSTrainer):
             project_dir=self.exp_dir,
             logging_dir=os.path.join(self.exp_dir, "log"),
         )
+        print("Initializing accelerator......")
         self.accelerator = accelerate.Accelerator(
             gradient_accumulation_steps=self.cfg.train.gradient_accumulation_step,
             log_with=self.cfg.train.tracker,
             project_config=project_config,
         )
+        print("Accelerator initialized......")
         if self.accelerator.is_main_process:
             os.makedirs(project_config.project_dir, exist_ok=True)
             os.makedirs(project_config.logging_dir, exist_ok=True)
+        self.accelerator.wait_for_everyone()
+        print("Accelerator initing trackers......")
         with self.accelerator.main_process_first():
             self.accelerator.init_trackers(self.args.exp_name)
+        print("Accelerator init trackers done......")
+
 
     def _build_model(self):
         model = UniAmphionVC(cfg=self.cfg.model)
@@ -358,7 +362,16 @@ class VCTrainer(TTSTrainer):
         if self.cfg.train.use_dynamic_batchsize:
             print("Use Dynamic Batchsize......")
             Dataset, Collator = self._build_dataset()
-            train_dataset = Dataset("/mnt/data2/wangyuancheng/mls_english/train/audio")
+
+            directory_list = [
+            '/mnt/data2/wangyuancheng/mls_english/train/audio',
+            '/mnt/data2/wangyuancheng/mls_english/dev/audio',
+            '/mnt/data4/hehaorui/large_15s',
+            '/mnt/data4/hehaorui/medium_15s',
+            '/mnt/data4/hehaorui/small_15s',
+            ]
+            
+            train_dataset = Dataset(directory_list)
             train_collate = Collator(self.cfg)
             batch_sampler = batch_by_size(
                 train_dataset.num_frame_indices,
@@ -390,7 +403,7 @@ class VCTrainer(TTSTrainer):
             )
             self.accelerator.wait_for_everyone()
 
-            valid_dataset = Dataset("/mnt/data2/wangyuancheng/mls_english/dev/audio")
+            valid_dataset = Dataset(["/mnt/data2/wangyuancheng/mls_english/test/audio"])
             valid_collate = Collator(self.cfg)
             batch_sampler = batch_by_size(
                 valid_dataset.num_frame_indices,
@@ -501,7 +514,6 @@ class VCTrainer(TTSTrainer):
         for k, v in batch.items():
             if isinstance(v, torch.Tensor):
                 batch[k] = v.to(device)
-        self.w2v = self.w2v.to(device)
         speech = batch["speech"]
         ref_speech = batch["ref_speech"]
         with torch.set_grad_enabled(False):
@@ -554,27 +566,23 @@ class VCTrainer(TTSTrainer):
         total_loss += diff_loss_x0
         train_losses["diff_loss_x0"] = diff_loss_x0
 
-        # diff loss noise
-        diff_loss_noise = diff_loss(
-            diff_out["noise_pred"], diff_out["noise"], mask=mask
-        )
+        diff_loss_noise = diff_loss(diff_out["noise_pred"], diff_out["noise"], mask=mask)
         total_loss += diff_loss_noise 
         train_losses["diff_loss_noise"] = diff_loss_noise
+        train_losses["total_loss"] = total_loss
 
         self.optimizer.zero_grad()
         self.accelerator.backward(total_loss)
         if self.accelerator.sync_gradients:
-            self.accelerator.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()), 0.5
-            )
+            self.accelerator.clip_grad_norm_(filter(lambda p: p.requires_grad, self.model.parameters()), 0.5)
         self.optimizer.step()
         self.scheduler.step()
 
         for item in train_losses:
-            train_losses[item] = train_losses[item].item()
+            train_losses[item] = train_losses[item].item()/pitch.shape[0]
 
         train_losses["batch_size"] = pitch.shape[0]
-        return (total_loss.item(), train_losses, train_stats)
+        return (train_losses["total_loss"], train_losses, train_stats)
 
     @torch.inference_mode()
     def _valid_step(self, batch):
@@ -640,14 +648,13 @@ class VCTrainer(TTSTrainer):
         )
         total_loss += diff_loss_noise 
         valid_losses["diff_loss_noise"] = diff_loss_noise
-
-
+        valid_losses["total_loss"] = total_loss
 
         for item in valid_losses:
-            valid_losses[item] = valid_losses[item].item()
+            valid_losses[item] = valid_losses[item].item()/pitch.shape[0]
 
         valid_losses["batch_size"] = pitch.shape[0]
-        return (total_loss.item(), valid_losses, valid_stats)
+        return (valid_losses["total_loss"], valid_losses, valid_stats)
 
     @torch.inference_mode()
     def _valid_epoch(self):
@@ -661,7 +668,7 @@ class VCTrainer(TTSTrainer):
             self.model.eval()
 
         epoch_sum_loss = 0.0
-        epoch_losses = dict()
+        # epoch_losses = dict()
 
         for batch in tqdm(
             self.valid_dataloader,
@@ -679,14 +686,14 @@ class VCTrainer(TTSTrainer):
                 if isinstance(v, torch.Tensor):
                     batch[k] = v.to(device)
 
-            total_loss, valid_losses, valid_stats = self._valid_step(batch)
-            epoch_sum_loss = total_loss
-            for key, value in valid_losses.items():
-                epoch_losses[key] = value
+            total_loss, _, _ = self._valid_step(batch)
+            epoch_sum_loss += total_loss
+            # for key, value in valid_losses.items():
+            #     epoch_losses[key] = value
 
         self.accelerator.wait_for_everyone()
 
-        return epoch_sum_loss, epoch_losses
+        return epoch_sum_loss, _
 
     def _train_epoch(self):
         r"""Training epoch. Should return average loss of a batch (sample) over
@@ -704,7 +711,7 @@ class VCTrainer(TTSTrainer):
             self.w2v.eval()
 
         epoch_sum_loss: float = 0.0 # total loss
-        epoch_losses: dict = {} # loss dict
+        # epoch_losses: dict = {} # loss dict
         epoch_step: int = 0 # step count
 
         for batch in tqdm(
@@ -727,39 +734,30 @@ class VCTrainer(TTSTrainer):
 
             # Do training step and BP
             with self.accelerator.accumulate(self.model):
-                total_loss, train_losses, training_stats = self._train_step(batch)
+                total_loss, train_losses, _ = self._train_step(batch)
             self.batch_count += 1
-
-            
-
-            # Update info for each step
-            # TODO: step means BP counts or batch counts?
+            self.step += 1
             if self.batch_count % self.cfg.train.gradient_accumulation_step == 0:
-                epoch_sum_loss = total_loss
-                self.current_loss = epoch_sum_loss
+                epoch_sum_loss += total_loss
+                self.current_loss = total_loss
                 if isinstance(train_losses, dict):
                     for key, loss in train_losses.items():
-                        epoch_losses[key] = loss
+                        # epoch_losses[key] = loss
                         self.accelerator.log(
                             {"Epoch/Train {} Loss".format(key): loss},
                             step=self.step,
                         )
 
-                if (
-                    self.accelerator.is_main_process
-                    and self.batch_count
-                    % (1 * self.cfg.train.gradient_accumulation_step)
-                    == 0
-                ):
+                if (self.accelerator.is_main_process and self.batch_count % 5 == 0):
                     self.echo_log(train_losses, mode="Training")
-                self.step += 1
+                
                 epoch_step += 1
 
                 self.save_checkpoint() # save checkpont
                 
         self.accelerator.wait_for_everyone()
 
-        return epoch_sum_loss, epoch_losses
+        return epoch_sum_loss, _
     
     def train_loop(self):
         r"""Training loop. The public entry of training process."""
@@ -771,40 +769,26 @@ class VCTrainer(TTSTrainer):
 
         # Wait to ensure good to go
         self.accelerator.wait_for_everyone()
-        while self.epoch < self.max_epoch:
+        # stop when meet max epoch or self.cfg.train.num_train_steps
+        while self.epoch < self.max_epoch and self.step < self.cfg.train.num_train_steps:
             if self.accelerator.is_main_process:
                 self.logger.info("\n")
                 self.logger.info("-" * 32)
                 self.logger.info("Epoch {}: ".format(self.epoch))
-
-            # Do training 
-            train_total_loss, train_losses = self._train_epoch()
-            if isinstance(train_losses, dict):
-                for key, loss in train_losses.items():
-                    if self.accelerator.is_main_process:
-                        self.logger.info("  |- Train/{} Loss: {:.6f}".format(key, loss))
-                    self.accelerator.log(
-                        {"Epoch/Train {} Loss".format(key): loss},
-                        step=self.epoch,
-                    )
-
-            valid_total_loss, valid_losses = self._valid_epoch()
-            if isinstance(valid_losses, dict):
-                for key, loss in valid_losses.items():
-                    if self.accelerator.is_main_process:
-                        self.logger.info("  |- Valid/{} Loss: {:.6f}".format(key, loss))
-                    self.accelerator.log(
-                        {"Epoch/Train {} Loss".format(key): loss},
-                        step=self.epoch,
-                    )
+                print("Start training......")
+            
+            train_total_loss, _ = self._train_epoch()
+            if self.accelerator.is_main_process:
+                print("Start validating......")
+            valid_total_loss, _ = self._valid_epoch()
 
             if self.accelerator.is_main_process:
-                self.logger.info("  |- Train/Loss: {:.6f}".format(train_total_loss))
-                self.logger.info("  |- Valid/Loss: {:.6f}".format(valid_total_loss))
+                self.logger.info("  |- Train/Loss: {:.6f}".format(train_total_loss/len(self.train_dataloader)))
+                self.logger.info("  |- Valid/Loss: {:.6f}".format(valid_total_loss/len(self.train_dataloader)))
             self.accelerator.log(
                 {
-                    "Epoch/Train Loss": train_total_loss,
-                    "Epoch/Valid Loss": valid_total_loss,
+                    "Epoch/Train Loss": train_total_loss/len(self.train_dataloader),
+                    "Epoch/Valid Loss": valid_total_loss/len(self.valid_dataloader),
                 },
                 step=self.epoch,
             )
@@ -817,11 +801,12 @@ class VCTrainer(TTSTrainer):
                 os.path.join(
                     self.checkpoint_dir,
                     "final_epoch-{:04d}_step-{:07d}_loss-{:.6f}".format(
-                        self.epoch, self.step, valid_total_loss
+                        self.epoch, self.step, train_total_loss
                     ),
                 )
             )
         self.accelerator.end_training()
+        print("Training finished......")
 
     def save_checkpoint(self):
         self.accelerator.wait_for_everyone()

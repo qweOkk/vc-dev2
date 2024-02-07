@@ -63,17 +63,16 @@ def main():
     args.log_dir = os.path.join(cfg.log_dir, args.exp_name)
     os.makedirs(args.log_dir, exist_ok=True)
 
-    
-    args.local_rank = torch.device("cuda")
+    args.local_rank = torch.device("cuda:5")
 
-    ckpt_path = "/mnt/data2/hehaorui/ckpt/vc/ns2_vc_gpus/checkpoint/epoch-0002_step-0590000_loss-0.722881/model.safetensors"
+    ckpt_path = "/mnt/data2/hehaorui/ckpt/vc/ns2_vc_gpus/checkpoint/epoch-0003_step-0741000_loss-0.881766/model.safetensors"
     zero_shot_json_file_path = ("/home/hehaorui/code/Amphion/egs/tts/VC/zero_shot_json.json")
 
-
+    torch.cuda.empty_cache()
     model = UniAmphionVC(cfg.model)
     load_model(model, ckpt_path)
     model.cuda(args.local_rank)
-
+    
     w2v = HubertWithKmeans(
             checkpoint_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3.pt",
             kmeans_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3_L11_km1000.bin",
@@ -90,15 +89,10 @@ def main():
     for info in zero_shot_json:
         utt_id = info["uid"]
         utt_dict[utt_id] = {}
-        utt_dict[utt_id]["source_speech"], _ = librosa.load(
-            info["source_wav_path"], sr=16000
-        )
-        utt_dict[utt_id]["target_speech"], _ = librosa.load(
-            info["target_wav_path"], sr=16000
-        )
-        utt_dict[utt_id]["prompt_speech"], _ = librosa.load(
-            info["prompt_wav_path"], sr=16000
-        )
+        utt_dict[utt_id]["source_speech"] = info["source_wav_path"]
+        utt_dict[utt_id]["target_speech"] = info["target_wav_path"]
+        utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"]
+
     os.makedirs(args.output, exist_ok=True)
     test_cases = []
 
@@ -109,23 +103,26 @@ def main():
 
     temp_id = 0
     for utt_id, utt in tqdm(utt_dict.items()):
-        # if temp_id > 5:
-        #     break
+        if temp_id > 40:
+            break
         temp_id += 1
         # source is the input
-        wav = utt["source_speech"]
+        wav_path = utt["source_speech"]
+        wav, _ = librosa.load(wav_path, sr=16000)
         wav = np.pad(wav, (0, 1600 - len(wav) % 1600))
         audio = torch.from_numpy(wav).to(args.local_rank)
         audio = audio[None, :]
         
         # target is the ground truth
-        tgt_wav = utt["target_speech"]
+        tgt_wav_path = utt["target_speech"]
+        tgt_wav,_ = librosa.load(tgt_wav_path, sr=16000)
         tgt_wav = np.pad(tgt_wav, (0, 1600 - len(tgt_wav) % 1600))
         tgt_audio = torch.from_numpy(tgt_wav).to(args.local_rank)
         tgt_audio = tgt_audio[None, :]
 
         # prompt is the reference
-        ref_wav = utt["prompt_speech"]
+        ref_wav_path = utt["prompt_speech"]
+        ref_wav,_ = librosa.load(ref_wav_path, sr=16000)
         ref_wav = np.pad(ref_wav, (0, 200 - len(ref_wav) % 200))
         ref_audio = torch.from_numpy(ref_wav).to(args.local_rank)
         ref_audio = ref_audio[None, :]
@@ -194,29 +191,31 @@ def main():
             np.save(ref_path, tgt_mel.detach().cpu().numpy())
             np.save(source_path, source_mel.detach().cpu().numpy())
             test_cases.append(test_case)
+    del model, w2v, ref_mel, ref_mask, content_feature, pitch, x0, ref_audio, tgt_audio, audio, tgt_mel, source_mel
     data = dict()
     data["dataset"] = "recon"
     data["test_cases"] = test_cases
     with open(f"{args.output}/recon.json", "w") as f:
         json.dump(data, f)
+    torch.cuda.empty_cache()
     print("running inference_e2e.py")
     os.system(
         f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/recon/mel'} --output_dir={f'{args.output}/recon/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
+    torch.cuda.empty_cache()
     os.system(
         f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/target/mel'} --output_dir={f'{args.output}/target/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
+    torch.cuda.empty_cache()
     os.system(
         f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/source/mel'} --output_dir={f'{args.output}/source/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
     os.system(
         f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/prompt/mel'} --output_dir={f'{args.output}/prompt/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
+    torch.cuda.empty_cache()
     print("running vc_test.py")
-    #os.system(f"python /home/hehaorui/code/Amphion/models/tts/vc/vc_test.py -r={f'{args.output}/prompt/wav'} -d={f'{args.output}/recon/wav'}")
     os.system(f"python /home/hehaorui/code/Amphion/models/tts/vc/vc_test.py -r={f'{args.output}/target/wav'} -d={f'{args.output}/recon/wav'}")
-    #os.system(f"python /home/hehaorui/code/Amphion/models/tts/vc/vc_test.py -r={f'{args.output}/prompt/wav'} -d={f'{args.output}/target/wav'}")        
-
 
 if __name__ == "__main__":
     main()

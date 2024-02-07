@@ -22,10 +22,10 @@ if [ -z "$exp_config" ]; then
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="ns2_vc_gpus"
+exp_name="ns2_large_test"
 
 if [ -z "$gpu" ]; then
-    gpu="0,1,2,3"
+    gpu="0,1,2,3,4,6,7"
 fi
 
 ######## Train Model ###########

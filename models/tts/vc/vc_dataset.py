@@ -9,14 +9,25 @@ from models.base.base_dataset import (
     BaseCollator,
 )
 
-from multiprocessing import Pool
+from multiprocessing import Pool, Manager
 import random
 import torchaudio
 import random
 
-def get_metadata(file):
-    metadata = torchaudio.info(file)
-    return file, metadata.num_frames
+NUM_WORKERS = 128
+SAMPLE_RATE = 16000
+
+def get_metadata(file_path):
+    metadata = torchaudio.info(file_path)
+    return file_path, metadata.num_frames
+
+def get_speaker(file_path):
+    speaker_id = file_path.split(os.sep)[-3]
+    if 'mls' in file_path:
+        speaker = 'mls_' + speaker_id
+    else:
+        speaker = 'libri_' + speaker_id
+    return file_path, speaker
 
 def process_files(files):
     metadata_cache_path = '/mnt/data2/hehaorui/ckpt/metadata_cache.json'
@@ -25,47 +36,55 @@ def process_files(files):
             metadata_cache = json.load(f)
     else:
         metadata_cache = {}
-    
-    # Prepare a list of files to process
     files_to_process = [file for file in files if file not in metadata_cache]
-
     if len(files_to_process) != 0:
-        # Use multiprocessing Pool to process files in parallel
-        with Pool(processes=16) as pool:
+        with Pool(processes=NUM_WORKERS) as pool:
             for file, num_frames in tqdm(pool.imap_unordered(get_metadata, files_to_process), total=len(files_to_process)):
                 metadata_cache[file] = num_frames
-        
-        # Save updated metadata_cache
         with open(metadata_cache_path, 'w') as f:
+            print(f"Saving metadata cache to {metadata_cache_path}")
             json.dump(metadata_cache, f)
-        
-    # Filter files
-    filtered_files = []
-    all_num_frames = []
-    index2numframes = {}
-    for file in files:
-        num_frames = metadata_cache[file]
-        if 16000 * 3 <= num_frames <= 16000 * 25:
-            filtered_files.append(file)
-            all_num_frames.append(num_frames)
-            index2numframes[len(filtered_files) - 1] = num_frames
-    del metadata_cache
-    return filtered_files, all_num_frames, index2numframes
+    else:
+        print(f"skipping processing num_frames, loaded {len(metadata_cache)} files")
+    return metadata_cache
+
+def process_speakers(files):
+    speaker_cache_path = '/mnt/data2/hehaorui/ckpt/file2speaker.json'
+    if os.path.exists(speaker_cache_path):
+        with open(speaker_cache_path, 'r') as f:
+            speaker_cache = json.load(f)
+    else:
+        speaker_cache = {}
+    files_to_process = [file for file in files if file not in speaker_cache]
+    if len(files_to_process) != 0:
+        with Pool(processes=NUM_WORKERS) as pool:
+            for file, speaker in tqdm(pool.imap_unordered(get_speaker, files_to_process), total=len(files_to_process)):
+                speaker_cache[file] = speaker
+        with open(speaker_cache_path, 'w') as f:
+            print(f"Saving speaker cache to {speaker_cache_path}")
+            json.dump(speaker_cache, f)
+    else:
+        print(f"skipping processing speakers, loaded {len(speaker_cache)} files")
+    return speaker_cache
 
 class VCDataset(Dataset):
-    def __init__(self, directory):
-        self.directory = directory
-        print(f"Loading data from {directory}")
-        self.files = self.get_all_flac(directory)
-        # if 'dev' in directory:
-        #     self.files = random.sample(self.files, 1000)  # Randomly select 1000 files.
-        # else:
-        #     self.files = random.sample(self.files, 5000)
-        
-        random.shuffle(self.files)  # Shuffle the files.
-        print(f"Loaded {len(self.files)} files")
-        self.filtered_files, self.all_num_frames, self.index2numframes = process_files(self.files)
+    def __init__(self, directory_list):
+        self.directory_list = directory_list
+        self.files = []
+        for directory in directory_list:
+            print(f"Loading {directory}")
+            self.files.extend(self.get_flac_files(directory))
+            print(f"Loaded {len(self.files)} files")
+            meta_data_cache = process_files(self.files)
+            speaker_cache = process_speakers(self.files)
 
+        print(f"Loaded {len(self.files)} files")
+        # # random select 500 files for testing
+        # self.files = random.sample(self.files, 500)
+        random.shuffle(self.files)  # Shuffle the files.
+        self.filtered_files, self.all_num_frames, self.index2numframes, self.index2speaker = self.filter_files(meta_data_cache, speaker_cache)
+        print(f"Loaded {len(self.filtered_files)} files")
+        self.speaker2id = self.create_speaker2id()
         self.num_frame_sorted = np.array(sorted(self.all_num_frames))
         self.num_frame_indices = np.array(
             sorted(
@@ -77,7 +96,8 @@ class VCDataset(Dataset):
         flac_files = []
         for root, dirs, files in os.walk(directory):
             for file in files:
-                if file.endswith(".flac"):
+                # flac or wav
+                if file.endswith(".flac") or file.endswith(".wav"):
                     flac_files.append(os.path.join(root, file))
         return flac_files
 
@@ -88,26 +108,55 @@ class VCDataset(Dataset):
         # 如果没有子目录，就直接在当前目录中查找
         if not directories:
             return self.get_flac_files(directory)
-        
-        # 使用多进程在每个子目录中查找flac文件
-        with Pool(processes=16) as pool:
-            results = pool.map(self.get_flac_files, directories)
-        
-        # 合并所有进程的结果
-        flac_files = [file for sublist in results for file in sublist]
-        return flac_files
+        with Pool(processes=NUM_WORKERS) as pool:
+            results = []
+            for result in tqdm(pool.imap_unordered(self.get_flac_files, directories), total=len(directories), desc="Processing"):
+                results.extend(result)
+        print(f"Found {len(results)} waveform files")
+        return results
     
     def get_num_frames(self, index):
         return self.index2numframes[index]
+    
+    def filter_files(self, metadata_cache, speaker_cache):
+        # Filter files
+        filtered_files = []
+        all_num_frames = []
+        index2numframes = {}
+        index2speaker = {}
+        for file in self.files:
+            num_frames = metadata_cache[file]
+            if SAMPLE_RATE * 3 <= num_frames <= SAMPLE_RATE * 25:
+                filtered_files.append(file)
+                all_num_frames.append(num_frames)
+                index2speaker[len(filtered_files) - 1] = speaker_cache[file]
+                index2numframes[len(filtered_files) - 1] = num_frames
+        del metadata_cache
+        return filtered_files, all_num_frames, index2numframes, index2speaker
+    
+    def create_speaker2id(self):
+        speaker2id = {}
+        unique_id = 0  # 开始的唯一 ID
+        print(f"Creating speaker2id from {len(self.index2speaker)} utterences")
+        for _, speaker in tqdm(self.index2speaker.items()):
+            if speaker not in speaker2id:
+                speaker2id[speaker] = unique_id
+                unique_id += 1  # 为下一个唯一 speaker 增加 ID
+        print(f"Created speaker2id with {len(speaker2id)} speakers")
+        return speaker2id
     
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
         file_path = self.filtered_files[idx]
-        speech, _ = librosa.load(file_path, sr=16000)
+        speech, _ = librosa.load(file_path, sr=SAMPLE_RATE)
         speech = torch.tensor(speech, dtype=torch.float32)
-        return self._get_reference_vc(speech, hop_length=200)
+        inputs = self._get_reference_vc(speech, hop_length=200)
+        speaker = self.index2speaker[idx]
+        speaker_id = self.speaker2id[speaker]
+        inputs["speaker_id"] = speaker_id
+        return inputs
     
     def _get_reference_vc(self, speech, hop_length):
         pad_size = 1600 - speech.shape[0] % 1600
@@ -124,11 +173,7 @@ class VCDataset(Dataset):
         ref_mask = torch.ones(len(ref_speech) // hop_length)
         mask = torch.ones(len(new_speech) // hop_length)
 
-        # x_ref: (B, T, d_ref)
-        # key_padding_mask: (B, T)
-
         return {"speech": new_speech, "ref_speech": ref_speech, "ref_mask": ref_mask, "mask": mask}
-    
 
 
 class VCCollator(BaseCollator):
@@ -161,6 +206,9 @@ class VCCollator(BaseCollator):
         ref_masks = [process_tensor(b['ref_mask']) for b in batch]
         packed_batch_features['ref_mask'] = pad_sequence(ref_masks, batch_first=True, padding_value=0)
 
+        # Process 'speaker_id' data
+        speaker_ids = [process_tensor(b['speaker_id'], dtype=torch.int64) for b in batch]
+        packed_batch_features['speaker_id'] = torch.stack(speaker_ids, dim=0)
         return packed_batch_features
 
 

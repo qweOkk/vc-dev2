@@ -23,15 +23,15 @@ model = WavLMForXVector.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
 
 # feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("microsoft/wavlm-base-plus-sv")
 # model = WavLMForXVector.from_pretrained("microsoft/wavlm-base-plus-sv")
-model = model.cuda("cuda:0")
+device = torch.device("cuda:5")
+model = model.to(device)
 
 
-# feature_extractor = feature_extractor.cuda()
 def WavLM_SV(ge_audio, ref_audio):
     audio = [ge_audio, ref_audio]
     inputs = feature_extractor(audio, padding=True, sampling_rate=16000, return_tensors="pt")
     for key in inputs.keys():
-        inputs[key] = inputs[key].cuda("cuda:0")
+        inputs[key] = inputs[key].to(device)
     with torch.no_grad():
         embeddings = model(**inputs).embeddings
         embeddings = torch.nn.functional.normalize(embeddings, dim=-1).cpu()

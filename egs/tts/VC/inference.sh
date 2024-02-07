@@ -25,17 +25,11 @@ echo "Exprimental Configuration File: $exp_config"
 exp_name="ns2_inference"
 
 if [ -z "$gpu" ]; then
-    gpu="7"
+    gpu="5"
 fi
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
-
-# CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 29510 \
-# "${work_dir}"/models/tts/vc/vc_inference.py \
-#     --config $exp_config \
-#     --exp_name $exp_name \
-#     --log_level debug 
 
 python "${work_dir}"/models/tts/vc/vc_inference.py \
     --config $exp_config \

@@ -79,36 +79,15 @@ def main():
     VALLETrainer.add_arguments(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
-<<<<<<< HEAD
-=======
-
-    # Data Augmentation
-    if (
-        type(cfg.preprocess.data_augment) == list
-        and len(cfg.preprocess.data_augment) > 0
-    ):
-        new_datasets_list = []
-        for dataset in cfg.preprocess.data_augment:
-            new_datasets = [
-                f"{dataset}_pitch_shift" if cfg.preprocess.use_pitch_shift else None,
-                (
-                    f"{dataset}_formant_shift"
-                    if cfg.preprocess.use_formant_shift
-                    else None
-                ),
-                f"{dataset}_equalizer" if cfg.preprocess.use_equalizer else None,
-                f"{dataset}_time_stretch" if cfg.preprocess.use_time_stretch else None,
-            ]
-            new_datasets_list.extend(filter(None, new_datasets))
-        cfg.dataset.extend(new_datasets_list)
-
->>>>>>> de9bb2d4f62c31866e8ed09bb9f0190f62bb0ceb
+    print("experiment name: ", args.exp_name)
     # # CUDA settings
     cuda_relevant()
     # Build trainer
+    print(f"Building {cfg.model_type} trainer")
     trainer = build_trainer(args, cfg)
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
+    print(f"Start training {cfg.model_type} model")
     trainer.train_loop()
 
 
