@@ -22,11 +22,11 @@
         "keep_last": [20],
         "run_eval": [true],
         "dataloader": {
-          "num_worker": 16,
+          "num_worker": 64,
           "pin_memory": true
         },
         "adam": {
-            "lr": 1e-4
+            "lr": 5e-5
         },
         "use_dynamic_batchsize": true,
         "batch_size": 8,

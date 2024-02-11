@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from models.tts.base.tts_trainer import TTSTrainer
 from models.base.base_sampler import VariableSampler
 
+import random
 from diffusers import get_scheduler
 import torch.nn.functional as F
 
@@ -182,61 +183,61 @@ class VCTrainer(TTSTrainer):
 
         # set random seed
         with self.accelerator.main_process_first():
-            start = time.monotonic_ns()
+            #start = time.time_ns()
             self._set_random_seed(self.cfg.train.random_seed)
-            end = time.monotonic_ns()
-            if self.accelerator.is_main_process:
-                self.logger.debug(
-                    f"Setting random seed done in {(end - start) / 1e6:.2f}ms"
-                )
-                self.logger.debug(f"Random seed: {self.cfg.train.random_seed}")
+            #end = time.time_ns()
+            # if self.accelerator.is_main_process:
+            #     self.logger.debug(
+            #         f"Setting random seed done in {(end - start) / 1e6:.2f}ms"
+            #     )
+            #     self.logger.debug(f"Random seed: {self.cfg.train.random_seed}")
  
         # setup data_loader
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building dataset...")
-            start = time.monotonic_ns()
+            # start = time.time_ns()
             self.train_dataloader, self.valid_dataloader = self._build_dataloader()
-            end = time.monotonic_ns()
-            if self.accelerator.is_main_process:
-                self.logger.info(
-                    f"Building dataset done in {(end - start) / 1e6:.2f}ms"
-                )
+            # end = time.time_ns()
+            # if self.accelerator.is_main_process:
+            #     self.logger.info(
+            #         f"Building dataset done in {(end - start) / 1e6:.2f}ms"
+            #     )
 
         # setup model
             
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building model...")
-            start = time.monotonic_ns()
+            #start = time.time_ns()
             self.model, self.w2v = self._build_model()
-            end = time.monotonic_ns()
-            if self.accelerator.is_main_process:
-                self.logger.debug(self.model)
-                self.logger.info(f"Building model done in {(end - start) / 1e6:.2f}ms")
-                self.logger.info(
-                    f"Model parameters: {self._count_parameters(self.model)/1e6:.2f}M"
-                )
+            #end = time.time_ns()
+            # if self.accelerator.is_main_process:
+            #     self.logger.debug(self.model)
+            #     self.logger.info(f"Building model done in {(end - start) / 1e6:.2f}ms")
+            #     self.logger.info(
+            #         f"Model parameters: {self._count_parameters(self.model)/1e6:.2f}M"
+            #     )
 
         # optimizer & scheduler
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building optimizer and scheduler...")
-            start = time.monotonic_ns()
+            # start = time.time_ns()
             self.optimizer = self._build_optimizer()
             self.scheduler = self._build_scheduler()
-            end = time.monotonic_ns()
-            if self.accelerator.is_main_process:
-                self.logger.info(
-                    f"Building optimizer and scheduler done in {(end - start) / 1e6:.2f}ms"
-                )
+            # end = time.time_ns()
+            # if self.accelerator.is_main_process:
+            #     self.logger.info(
+            #         f"Building optimizer and scheduler done in {(end - start) / 1e6:.2f}ms"
+            #     )
 
         # accelerate prepare
         if not self.cfg.train.use_dynamic_batchsize:
             with self.accelerator.main_process_first():
                 if self.accelerator.is_main_process:
                     self.logger.info("Initializing accelerate...")
-            start = time.monotonic_ns()
+            # start = time.time_ns()
             (
                 self.train_dataloader,
                 self.valid_dataloader,
@@ -270,40 +271,40 @@ class VCTrainer(TTSTrainer):
         else:
             self.scheduler = self.accelerator.prepare(self.scheduler)
 
-        end = time.monotonic_ns()
-        if self.accelerator.is_main_process:
-            self.logger.info(
-                f"Initializing accelerate done in {(end - start) / 1e6:.2f}ms"
-            )
+        # end = time.time_ns()
+        # if self.accelerator.is_main_process:
+        #     self.logger.info(
+        #         f"Initializing accelerate done in {(end - start) / 1e6:.2f}ms"
+        #     )
 
         # create criterion
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building criterion...")
-            start = time.monotonic_ns()
+            # start = time.time_ns()
             self.criterion = self._build_criterion()
-            end = time.monotonic_ns()
-            if self.accelerator.is_main_process:
-                self.logger.info(
-                    f"Building criterion done in {(end - start) / 1e6:.2f}ms"
-                )
+            # end = time.time_ns()
+            # if self.accelerator.is_main_process:
+            #     self.logger.info(
+            #         f"Building criterion done in {(end - start) / 1e6:.2f}ms"
+            #     )
 
         # TODO: Resume from ckpt need test/debug
         with self.accelerator.main_process_first():
             if args.resume:
                 if self.accelerator.is_main_process:
                     self.logger.info("Resuming from checkpoint...")
-                start = time.monotonic_ns()
+                # start = time.time_ns()
                 ckpt_path = self._load_model(
                     self.checkpoint_dir,
                     args.checkpoint_path,
                     resume_type=args.resume_type,
                 )
-                end = time.monotonic_ns()
-                if self.accelerator.is_main_process:
-                    self.logger.info(
-                        f"Resuming from checkpoint done in {(end - start) / 1e6:.2f}ms"
-                    )
+                # end = time.time_ns()
+                # if self.accelerator.is_main_process:
+                #     self.logger.info(
+                #         f"Resuming from checkpoint done in {(end - start) / 1e6:.2f}ms"
+                #     )
                 self.checkpoints_path = json.load(
                     open(os.path.join(ckpt_path, "ckpts.json"), "r")
                 )
@@ -318,7 +319,7 @@ class VCTrainer(TTSTrainer):
         self.config_save_path = os.path.join(self.exp_dir, "args.json")
 
         # Only for TTS tasks
-        self.task_type = "TTS"
+        self.task_type = "VC"
         if self.accelerator.is_main_process:
             self.logger.info("Task type: {}".format(self.task_type))
 
@@ -360,19 +361,22 @@ class VCTrainer(TTSTrainer):
 
     def _build_dataloader(self):
         if self.cfg.train.use_dynamic_batchsize:
-            print("Use Dynamic Batchsize......")
-            Dataset, Collator = self._build_dataset()
+            if self.accelerator.is_main_process:
+                self.logger.info("Use Dynamic Batchsize......")
+
+            # Dataset, Collator = self._build_dataset()
 
             directory_list = [
-            '/mnt/data2/wangyuancheng/mls_english/train/audio',
             '/mnt/data2/wangyuancheng/mls_english/dev/audio',
-            '/mnt/data4/hehaorui/large_15s',
             '/mnt/data4/hehaorui/medium_15s',
             '/mnt/data4/hehaorui/small_15s',
+            '/mnt/data2/wangyuancheng/mls_english/train/audio',
+            '/mnt/data4/hehaorui/large_15s',
             ]
-            
-            train_dataset = Dataset(directory_list)
-            train_collate = Collator(self.cfg)
+            # random.shuffle(directory_list)
+
+            train_dataset = VCDataset(directory_list)
+            train_collate = VCCollator(self.cfg)
             batch_sampler = batch_by_size(
                 train_dataset.num_frame_indices,
                 train_dataset.get_num_frames,
@@ -403,8 +407,8 @@ class VCTrainer(TTSTrainer):
             )
             self.accelerator.wait_for_everyone()
 
-            valid_dataset = Dataset(["/mnt/data2/wangyuancheng/mls_english/test/audio"])
-            valid_collate = Collator(self.cfg)
+            valid_dataset = VCDataset(["/mnt/data2/wangyuancheng/mls_english/test/audio"])
+            valid_collate = VCCollator(self.cfg)
             batch_sampler = batch_by_size(
                 valid_dataset.num_frame_indices,
                 valid_dataset.get_num_frames,
@@ -430,10 +434,10 @@ class VCTrainer(TTSTrainer):
             self.accelerator.wait_for_everyone()
 
         else:
-            print("Use Normal Batchsize......")
-            Dataset, Collator = self._build_dataset()
-            train_dataset = Dataset(self.cfg, self.cfg.dataset[0], is_valid=False)
-            train_collate = Collator(self.cfg)
+            self.logger.info("Use Normal Batchsize......")
+            #VCDataset, VCCollator = self._build_dataset()
+            train_dataset = VCDataset(self.cfg, self.cfg.dataset[0], is_valid=False)
+            train_collate = VCCollator(self.cfg)
 
             train_loader = DataLoader(
                 train_dataset,
@@ -444,8 +448,8 @@ class VCTrainer(TTSTrainer):
                 pin_memory=self.cfg.train.dataloader.pin_memory,
             )
 
-            valid_dataset = Dataset(self.cfg, self.cfg.dataset[0], is_valid=True)
-            valid_collate = Collator(self.cfg)
+            valid_dataset = VCDataset(self.cfg, self.cfg.dataset[0], is_valid=True)
+            valid_collate = VCCollator(self.cfg)
 
             valid_loader = DataLoader(
                 valid_dataset,
@@ -499,6 +503,17 @@ class VCTrainer(TTSTrainer):
             quote_keys=True,
         )
 
+    def get_state_dict(self):
+        state_dict = {
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "step": self.step,
+            "epoch": self.epoch,
+            "batch_size": self.cfg.train.batch_size,
+        }
+        return state_dict
+    
     def load_model(self, checkpoint):
         self.step = checkpoint["step"]
         self.epoch = checkpoint["epoch"]
@@ -580,6 +595,8 @@ class VCTrainer(TTSTrainer):
 
         for item in train_losses:
             train_losses[item] = train_losses[item].item()/pitch.shape[0]
+
+        train_losses['lr'] = self.optimizer.param_groups[0]['lr']
 
         train_losses["batch_size"] = pitch.shape[0]
         return (train_losses["total_loss"], train_losses, train_stats)
@@ -793,6 +810,12 @@ class VCTrainer(TTSTrainer):
                 step=self.epoch,
             )
             self.epoch += 1
+            self.accelerator.wait_for_everyone()
+            if isinstance(self.scheduler, dict):
+                for key in self.scheduler.keys():
+                    self.scheduler[key].step()
+            else:
+                self.scheduler.step()
 
         # Finish training and save final checkpoint
         self.accelerator.wait_for_everyone()

@@ -12,26 +12,26 @@ export WORK_DIR=$work_dir
 export PYTHONPATH=$work_dir
 export PYTHONIOENCODING=UTF-8
  
-# cd $work_dir/modules/monotonic_align
-# mkdir -p monotonic_align
-# python setup.py build_ext --inplace
-# cd $work_dir
+cd $work_dir/modules/monotonic_align
+mkdir -p monotonic_align
+python setup.py build_ext --inplace
+cd $work_dir
 
 if [ -z "$exp_config" ]; then
     exp_config="${exp_dir}"/exp_config.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="ns2_large_test"
+exp_name="multi_datasets_preprocessing"
 
 if [ -z "$gpu" ]; then
-    gpu="0,1,2,3,4,6,7"
+    gpu="0"
 fi
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
-CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 29510 \
+CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
 "${work_dir}"/bins/tts/train.py \
     --config $exp_config \
     --exp_name $exp_name \

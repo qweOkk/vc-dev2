@@ -9,12 +9,13 @@ from models.base.base_dataset import (
     BaseCollator,
 )
 
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool, Lock
 import random
 import torchaudio
 import random
 
-NUM_WORKERS = 128
+NUM_WORKERS = 64
+lock = Lock()  # 创建一个全局锁
 SAMPLE_RATE = 16000
 
 def get_metadata(file_path):
@@ -29,61 +30,75 @@ def get_speaker(file_path):
         speaker = 'libri_' + speaker_id
     return file_path, speaker
 
-def process_files(files):
-    metadata_cache_path = '/mnt/data2/hehaorui/ckpt/metadata_cache.json'
-    if os.path.exists(metadata_cache_path):
-        with open(metadata_cache_path, 'r') as f:
-            metadata_cache = json.load(f)
-    else:
-        metadata_cache = {}
-    files_to_process = [file for file in files if file not in metadata_cache]
-    if len(files_to_process) != 0:
-        with Pool(processes=NUM_WORKERS) as pool:
-            for file, num_frames in tqdm(pool.imap_unordered(get_metadata, files_to_process), total=len(files_to_process)):
-                metadata_cache[file] = num_frames
-        with open(metadata_cache_path, 'w') as f:
-            print(f"Saving metadata cache to {metadata_cache_path}")
-            json.dump(metadata_cache, f)
-    else:
-        print(f"skipping processing num_frames, loaded {len(metadata_cache)} files")
-    return metadata_cache
+def safe_write_to_file(data, file_path, mode='w'):
+    try:
+        with lock, open(file_path, mode, encoding='utf-8') as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+    except IOError as e:
+        print(f"Error writing to {file_path}: {e}")
 
-def process_speakers(files):
-    speaker_cache_path = '/mnt/data2/hehaorui/ckpt/file2speaker.json'
-    if os.path.exists(speaker_cache_path):
-        with open(speaker_cache_path, 'r') as f:
-            speaker_cache = json.load(f)
-    else:
-        speaker_cache = {}
-    files_to_process = [file for file in files if file not in speaker_cache]
-    if len(files_to_process) != 0:
-        with Pool(processes=NUM_WORKERS) as pool:
-            for file, speaker in tqdm(pool.imap_unordered(get_speaker, files_to_process), total=len(files_to_process)):
-                speaker_cache[file] = speaker
-        with open(speaker_cache_path, 'w') as f:
-            print(f"Saving speaker cache to {speaker_cache_path}")
-            json.dump(speaker_cache, f)
-    else:
-        print(f"skipping processing speakers, loaded {len(speaker_cache)} files")
-    return speaker_cache
 
 class VCDataset(Dataset):
     def __init__(self, directory_list):
         self.directory_list = directory_list
+        print(f"Loading {len(directory_list)} directories: {directory_list}")
+        # Load metadata cache
+        self.metadata_cache_path = '/mnt/data2/hehaorui/ckpt/rp_metadata_cache.json'
+        print(f"Loading metadata_cache from {self.metadata_cache_path}")
+        if os.path.exists(self.metadata_cache_path):
+            with open(self.metadata_cache_path, 'r', encoding='utf-8') as f:
+                self.metadata_cache = json.load(f)
+            print(f"Loaded {len(self.metadata_cache)} metadata_cache")
+        else:
+            print(f"metadata_cache not found, creating new")
+            self.metadata_cache = {}
+        # Load speaker cache
+        self.speaker_cache_path = '/mnt/data2/hehaorui/ckpt/rp_file2speaker.json'
+        print(f"Loading speaker_cache from {self.speaker_cache_path}")
+        if os.path.exists(self.speaker_cache_path):
+            with open(self.speaker_cache_path, 'r', encoding='utf-8') as f:
+                self.speaker_cache = json.load(f)
+            print(f"Loaded {len(self.speaker_cache)} speaker_cache")
+        else:
+            print(f"speaker_cache not found, creating new")
+            self.speaker_cache = {}
+        
         self.files = []
+        # Load all flac files
         for directory in directory_list:
             print(f"Loading {directory}")
-            self.files.extend(self.get_flac_files(directory))
-            print(f"Loaded {len(self.files)} files")
-            meta_data_cache = process_files(self.files)
-            speaker_cache = process_speakers(self.files)
+            files = self.get_flac_files(directory)
+            random.shuffle(files)
+            print(f"Loaded {len(files)} files")
+            self.files.extend(files)
+            del files
+            print(f"Now {len(self.files)} files")
+            self.meta_data_cache = self.process_files()
+            self.speaker_cache = self.process_speakers()
+            # for each directory, save a backup for the metadata and speaker cache
+            # modify the file path to save the cache
+            temp_cache_path = self.metadata_cache_path.replace('.json', f'_{directory.split("/")[-1]}.json')
+            if not os.path.exists(temp_cache_path):
+                safe_write_to_file(self.meta_data_cache, temp_cache_path)
+                print(f"Saved metadata cache to {temp_cache_path}")
+            temp_cache_path = self.speaker_cache_path.replace('.json', f'_{directory.split("/")[-1]}.json')
+            if not os.path.exists(temp_cache_path):
+                safe_write_to_file(self.speaker_cache, temp_cache_path)
+                print(f"Saved speaker cache to {temp_cache_path}")
 
+
+
+        
         print(f"Loaded {len(self.files)} files")
         # # random select 500 files for testing
         # self.files = random.sample(self.files, 500)
         random.shuffle(self.files)  # Shuffle the files.
-        self.filtered_files, self.all_num_frames, self.index2numframes, self.index2speaker = self.filter_files(meta_data_cache, speaker_cache)
+
+        self.filtered_files, self.all_num_frames, self.index2numframes, self.index2speaker = self.filter_files()
         print(f"Loaded {len(self.filtered_files)} files")
+        
         self.speaker2id = self.create_speaker2id()
         self.num_frame_sorted = np.array(sorted(self.all_num_frames))
         self.num_frame_indices = np.array(
@@ -91,6 +106,33 @@ class VCDataset(Dataset):
                 range(len(self.all_num_frames)), key=lambda k: self.all_num_frames[k]
             )
         )
+        del self.meta_data_cache, self.speaker_cache
+
+    def process_files(self):
+        print(f"Processing metadata...")
+        files_to_process = [file for file in self.files if file not in self.metadata_cache]
+        if files_to_process:
+            with Pool(processes=NUM_WORKERS) as pool:
+                results = list(tqdm(pool.imap_unordered(get_metadata, files_to_process), total=len(files_to_process)))
+            for file, num_frames in results:
+                self.metadata_cache[file] = num_frames
+            safe_write_to_file(self.metadata_cache, self.metadata_cache_path)
+        else:
+            print(f"Skipping processing metadata, loaded {len(self.metadata_cache)} files")
+        return self.metadata_cache
+
+    def process_speakers(self):
+        print(f"Processing speakers...")
+        files_to_process = [file for file in self.files if file not in self.speaker_cache]
+        if files_to_process:
+            with Pool(processes=NUM_WORKERS) as pool:
+                results = list(tqdm(pool.imap_unordered(get_speaker, files_to_process), total=len(files_to_process)))
+            for file, speaker in results:
+                self.speaker_cache[file] = speaker
+            safe_write_to_file(self.speaker_cache, self.speaker_cache_path)
+        else:
+            print(f"Skipping processing speakers, loaded {len(self.speaker_cache)} files")
+        return self.speaker_cache
 
     def get_flac_files(self, directory):
         flac_files = []
@@ -102,10 +144,7 @@ class VCDataset(Dataset):
         return flac_files
 
     def get_all_flac(self, directory):
-        # 获取目录下的所有子目录
         directories = [os.path.join(directory, d) for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
-        
-        # 如果没有子目录，就直接在当前目录中查找
         if not directories:
             return self.get_flac_files(directory)
         with Pool(processes=NUM_WORKERS) as pool:
@@ -118,8 +157,10 @@ class VCDataset(Dataset):
     def get_num_frames(self, index):
         return self.index2numframes[index]
     
-    def filter_files(self, metadata_cache, speaker_cache):
+    def filter_files(self):
         # Filter files
+        metadata_cache = self.meta_data_cache
+        speaker_cache = self.speaker_cache
         filtered_files = []
         all_num_frames = []
         index2numframes = {}
@@ -131,7 +172,6 @@ class VCDataset(Dataset):
                 all_num_frames.append(num_frames)
                 index2speaker[len(filtered_files) - 1] = speaker_cache[file]
                 index2numframes[len(filtered_files) - 1] = num_frames
-        del metadata_cache
         return filtered_files, all_num_frames, index2numframes, index2speaker
     
     def create_speaker2id(self):

@@ -31,7 +31,7 @@ def main():
         required=True,
     )
     parser.add_argument(
-        "--num_workers", type=int, default=6, help="Number of dataloader workers."
+        "--num_workers", type=int, default=8, help="Number of dataloader workers."
     )
     parser.add_argument(
         "--exp_name",
@@ -51,8 +51,29 @@ def main():
         "--log_level", default="info", help="logging level (info, debug, warning)"
     )
     parser.add_argument(
-        "--output", default="/mnt/data2/hehaorui/vc_test/Results/VCTK", help="output path"
+        "--checkpoint_path",
+        type=str,
+        required=True,
+        help="Checkpoint for resume training or finetuning.",
     )
+    parser.add_argument(
+        "--output_dir", 
+        help="output path",
+        required=True,
+    )
+    parser.add_argument(
+        "--zero_shot_json_file_path",
+        type=str,
+        default="/mnt/data3/hehaorui/egs/tts/VC/zero_shot_json.json",
+        help="Zero shot json file path",
+    )
+    parser.add_argument(
+        "--cuda_id", 
+        type=int, 
+        default=7, 
+        help="Cuda id for training."
+    )
+
     parser.add_argument("--stdout_interval", default=5, type=int)
     parser.add_argument("--local_rank", default=-1, type=int)
     args = parser.parse_args()
@@ -63,26 +84,32 @@ def main():
     args.log_dir = os.path.join(cfg.log_dir, args.exp_name)
     os.makedirs(args.log_dir, exist_ok=True)
 
-    args.local_rank = torch.device("cuda:5")
-
-    ckpt_path = "/mnt/data2/hehaorui/ckpt/vc/ns2_vc_gpus/checkpoint/epoch-0003_step-0741000_loss-0.881766/model.safetensors"
-    zero_shot_json_file_path = ("/home/hehaorui/code/Amphion/egs/tts/VC/zero_shot_json.json")
-
+    cuda_id = args.cuda_id
+    args.local_rank = torch.device(f"cuda:{cuda_id}")
+    print("local rank", args.local_rank)
+    ckpt_path = args.checkpoint_path
+    print("ckpt_path", ckpt_path)
+    zero_shot_json_file_path = args.zero_shot_json_file_path
+    print("zero_shot_json_file_path", zero_shot_json_file_path)
     torch.cuda.empty_cache()
     model = UniAmphionVC(cfg.model)
+    print("loading model")
     load_model(model, ckpt_path)
+    print("model loaded")
     model.cuda(args.local_rank)
+    model.eval()
     
     w2v = HubertWithKmeans(
             checkpoint_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3.pt",
             kmeans_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3_L11_km1000.bin",
         )
     w2v = w2v.to(device=args.local_rank)
+    w2v.eval()
 
+    print("loading zero shot json")
     with open(zero_shot_json_file_path, "r") as f:
         zero_shot_json = json.load(f)
     zero_shot_json = zero_shot_json["test_cases"]
-
     print("length of test cases", len(zero_shot_json))
 
     utt_dict = {}
@@ -93,18 +120,18 @@ def main():
         utt_dict[utt_id]["target_speech"] = info["target_wav_path"]
         utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"]
 
-    os.makedirs(args.output, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
     test_cases = []
 
-    os.makedirs(f"{args.output}/recon/mel", exist_ok=True)
-    os.makedirs(f"{args.output}/target/mel", exist_ok=True)
-    os.makedirs(f"{args.output}/source/mel", exist_ok=True)
-    os.makedirs(f"{args.output}/prompt/mel", exist_ok=True)
+    os.makedirs(f"{args.output_dir}/recon/mel", exist_ok=True)
+    os.makedirs(f"{args.output_dir}/target/mel", exist_ok=True)
+    os.makedirs(f"{args.output_dir}/source/mel", exist_ok=True)
+    os.makedirs(f"{args.output_dir}/prompt/mel", exist_ok=True)
 
     temp_id = 0
     for utt_id, utt in tqdm(utt_dict.items()):
-        if temp_id > 40:
-            break
+        # if temp_id > 40:
+        #     break
         temp_id += 1
         # source is the input
         wav_path = utt["source_speech"]
@@ -180,10 +207,10 @@ def main():
             )
 
             test_case = dict()
-            recon_path = f"{args.output}/recon/mel/{utt_id}.npy"
-            ref_path = f"{args.output}/target/mel/{utt_id}.npy"
-            source_path = f"{args.output}/source/mel/{utt_id}.npy"
-            prompt_path = f"{args.output}/prompt/mel/{utt_id}.npy"
+            recon_path = f"{args.output_dir}/recon/mel/{utt_id}.npy"
+            ref_path = f"{args.output_dir}/target/mel/{utt_id}.npy"
+            source_path = f"{args.output_dir}/source/mel/{utt_id}.npy"
+            prompt_path = f"{args.output_dir}/prompt/mel/{utt_id}.npy"
             test_case["recon_ref_wav_path"] = recon_path.replace("/mel/", "/wav/").replace(".npy", "_generated_e2e.wav")
             test_case["reference_wav_path"] = ref_path.replace("/mel/", "/wav/").replace(".npy", "_generated_e2e.wav")
             np.save(recon_path, x0.transpose(1, 2).detach().cpu().numpy())
@@ -195,27 +222,27 @@ def main():
     data = dict()
     data["dataset"] = "recon"
     data["test_cases"] = test_cases
-    with open(f"{args.output}/recon.json", "w") as f:
+    with open(f"{args.output_dir}/recon.json", "w") as f:
         json.dump(data, f)
     torch.cuda.empty_cache()
     print("running inference_e2e.py")
     os.system(
-        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/recon/mel'} --output_dir={f'{args.output}/recon/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
+        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/recon/mel'} --output_dir={f'{args.output_dir}/recon/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
     torch.cuda.empty_cache()
     os.system(
-        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/target/mel'} --output_dir={f'{args.output}/target/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
+        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/target/mel'} --output_dir={f'{args.output_dir}/target/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
     torch.cuda.empty_cache()
     os.system(
-        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/source/mel'} --output_dir={f'{args.output}/source/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
+        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/source/mel'} --output_dir={f'{args.output_dir}/source/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
     os.system(
-        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output}/prompt/mel'} --output_dir={f'{args.output}/prompt/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
+        f"python /home/hehaorui/code/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/prompt/mel'} --output_dir={f'{args.output_dir}/prompt/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000"
     )
     torch.cuda.empty_cache()
     print("running vc_test.py")
-    os.system(f"python /home/hehaorui/code/Amphion/models/tts/vc/vc_test.py -r={f'{args.output}/target/wav'} -d={f'{args.output}/recon/wav'}")
+    os.system(f"python /home/hehaorui/code/Amphion/models/tts/vc/vc_test.py -r={f'{args.output_dir}/target/wav'} -d={f'{args.output_dir}/recon/wav'}")
 
 if __name__ == "__main__":
     main()
