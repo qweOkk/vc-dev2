@@ -14,7 +14,7 @@ import random
 import torchaudio
 import random
 
-NUM_WORKERS = 64
+NUM_WORKERS = 200
 lock = Lock()  # 创建一个全局锁
 SAMPLE_RATE = 16000
 
@@ -42,6 +42,9 @@ def safe_write_to_file(data, file_path, mode='w'):
 
 class VCDataset(Dataset):
     def __init__(self, directory_list):
+        print(f"Initializing VCDataset")
+        # number of workers
+        print(f"Using {NUM_WORKERS} workers")
         self.directory_list = directory_list
         print(f"Loading {len(directory_list)} directories: {directory_list}")
         # Load metadata cache
