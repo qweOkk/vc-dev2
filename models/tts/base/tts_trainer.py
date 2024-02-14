@@ -84,12 +84,12 @@ class TTSTrainer(BaseTrainer):
 
         # set random seed
         with self.accelerator.main_process_first():
-            start = time.monotonic_ns()
+            # start = time.monotonic_ns()
             self._set_random_seed(self.cfg.train.random_seed)
             end = time.monotonic_ns()
-            self.logger.debug(
-                f"Setting random seed done in {(end - start) / 1e6:.2f}ms"
-            )
+            # self.logger.debug(
+            #     f"Setting random seed done in {(end - start) / 1e6:.2f}ms"
+            # )
             self.logger.debug(f"Random seed: {self.cfg.train.random_seed}")
 
         # setup data_loader
@@ -167,13 +167,8 @@ class TTSTrainer(BaseTrainer):
                 self.args.resume_type = "finetune"
 
             self.logger.info("Resuming from checkpoint...")
-            start = time.monotonic_ns()
             self.ckpt_path = self._load_model(
                 self.checkpoint_dir, self.args.checkpoint_path, self.args.resume_type
-            )
-            end = time.monotonic_ns()
-            self.logger.info(
-                f"Resuming from checkpoint done in {(end - start) / 1e6:.2f}ms"
             )
             self.checkpoints_path = json.load(
                 open(os.path.join(self.ckpt_path, "ckpts.json"), "r")
@@ -291,7 +286,8 @@ class TTSTrainer(BaseTrainer):
             ls = [str(i) for i in Path(checkpoint_dir).glob("*")]
             ls.sort(key=lambda x: int(x.split("_")[-3].split("-")[-1]), reverse=True)
             checkpoint_path = ls[0]
-        self.logger.info("Load model from {}".format(checkpoint_path))
+        if self.accelerator.is_main_process:
+            self.logger.info("Load model from {}".format(checkpoint_path))
         print("Load model from {}".format(checkpoint_path))
         if resume_type == "resume":
             self.accelerator.load_state(checkpoint_path)
@@ -300,21 +296,44 @@ class TTSTrainer(BaseTrainer):
         elif resume_type == "finetune":
             if isinstance(self.model, dict):
                 for idx, sub_model in enumerate(self.model.keys()):
-                    if idx == 0:
-                        ckpt_name = "pytorch_model.bin"
-                    else:
-                        ckpt_name = "pytorch_model_{}.bin".format(idx)
+                    try:
+                        if idx == 0:
+                            ckpt_name = "pytorch_model.bin"
+                        else:
+                            ckpt_name = "pytorch_model_{}.bin".format(idx)
 
-                    self.model[sub_model].load_state_dict(
-                        torch.load(os.path.join(checkpoint_path, ckpt_name))
-                    )
+                        self.model[sub_model].load_state_dict(
+                            torch.load(os.path.join(checkpoint_path, ckpt_name))
+                        )
+                    except:
+                        if idx == 0:
+                            ckpt_name = "model.safetensors"
+                        else:
+                            ckpt_name = "model_{}.safetensors".format(idx)
+
+                        accelerate.load_checkpoint_and_dispatch(
+                            self.accelerator.unwrap_model(self.model[sub_model]),
+                            os.path.join(checkpoint_path, ckpt_name),
+                        )
+
                 self.model[sub_model].cuda(self.accelerator.device)
             else:
-                self.model.load_state_dict(
-                    torch.load(os.path.join(checkpoint_path, "pytorch_model.bin"))
-                )
+                try:
+                    self.model.load_state_dict(
+                        torch.load(os.path.join(checkpoint_path, "pytorch_model.bin"))
+                    )
+                    if self.accelerator.is_main_process:
+                        self.logger.info("Loaded 'pytorch_model.bin' for finetune")
+                except:
+                    accelerate.load_checkpoint_and_dispatch(
+                        self.accelerator.unwrap_model(self.model),
+                        os.path.join(checkpoint_path, "model.safetensors"),
+                    )
+                    if self.accelerator.is_main_process:
+                        self.logger.info("Loaded 'model.safetensors' for finetune")
                 self.model.cuda(self.accelerator.device)
-            self.logger.info("Load model weights for finetune SUCCESS!")
+            if self.accelerator.is_main_process:
+                self.logger.info("Load model weights for finetune SUCCESS!")
 
         else:
             raise ValueError("Unsupported resume type: {}".format(resume_type))

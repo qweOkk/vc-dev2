@@ -16,7 +16,6 @@ from utils.util import load_config
 def build_trainer(args, cfg):
     supported_trainer = {
         "VC": VCTrainer,
-
     }
     trainer_class = supported_trainer[cfg.model_type]
     trainer = trainer_class(args, cfg)

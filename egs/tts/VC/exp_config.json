@@ -17,7 +17,7 @@
         // New trainer and Accelerator
         "gradient_accumulation_step": 1,
         "tracker": ["tensorboard"],
-        "max_epoch": 5,
+        "max_epoch": 3,
         "save_checkpoint_stride": [1000],
         "keep_last": [20],
         "run_eval": [true],

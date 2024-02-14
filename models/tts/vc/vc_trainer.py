@@ -289,22 +289,19 @@ class VCTrainer(TTSTrainer):
             #         f"Building criterion done in {(end - start) / 1e6:.2f}ms"
             #     )
 
-        # TODO: Resume from ckpt need test/debug
+
         with self.accelerator.main_process_first():
+            if self.accelerator.is_main_process:
+                # show if resume
+                self.logger.info("Resume training: {}".format(args.resume))
             if args.resume:
                 if self.accelerator.is_main_process:
                     self.logger.info("Resuming from checkpoint...")
-                # start = time.time_ns()
                 ckpt_path = self._load_model(
                     self.checkpoint_dir,
                     args.checkpoint_path,
                     resume_type=args.resume_type,
                 )
-                # end = time.time_ns()
-                # if self.accelerator.is_main_process:
-                #     self.logger.info(
-                #         f"Resuming from checkpoint done in {(end - start) / 1e6:.2f}ms"
-                #     )
                 self.checkpoints_path = json.load(
                     open(os.path.join(ckpt_path, "ckpts.json"), "r")
                 )
@@ -373,7 +370,7 @@ class VCTrainer(TTSTrainer):
             '/mnt/data2/wangyuancheng/mls_english/train/audio',
             '/mnt/data4/hehaorui/large_15s',
             ]
-            # random.shuffle(directory_list)
+            random.shuffle(directory_list)
 
             train_dataset = VCDataset(directory_list)
             train_collate = VCCollator(self.cfg)
@@ -596,7 +593,9 @@ class VCTrainer(TTSTrainer):
         for item in train_losses:
             train_losses[item] = train_losses[item].item()/pitch.shape[0]
 
-        train_losses['lr'] = self.optimizer.param_groups[0]['lr']
+        learning_rate = self.optimizer.param_groups[0]['lr']
+        formatted_lr = f"{learning_rate:.1e}"
+        train_losses['lr'] = formatted_lr
 
         train_losses["batch_size"] = pitch.shape[0]
         return (train_losses["total_loss"], train_losses, train_stats)
@@ -710,7 +709,7 @@ class VCTrainer(TTSTrainer):
 
         self.accelerator.wait_for_everyone()
 
-        return epoch_sum_loss, _
+        return epoch_sum_loss, None
 
     def _train_epoch(self):
         r"""Training epoch. Should return average loss of a batch (sample) over
@@ -774,7 +773,7 @@ class VCTrainer(TTSTrainer):
                 
         self.accelerator.wait_for_everyone()
 
-        return epoch_sum_loss, _
+        return epoch_sum_loss, None
     
     def train_loop(self):
         r"""Training loop. The public entry of training process."""
