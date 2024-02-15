@@ -41,8 +41,17 @@ def safe_write_to_file(data, file_path, mode='w'):
 
 
 class VCDataset(Dataset):
-    def __init__(self, directory_list):
+    def __init__(self, args, TRAIN_MODE=True):
         print(f"Initializing VCDataset")
+        if TRAIN_MODE:
+            directory_list = args.directory_list
+        else:
+            directory_list = args.test_directory_list
+        random.shuffle(directory_list)
+
+        print(args)
+        self.use_speaker = args.use_speaker
+        self.use_noise = args.use_noise     
         # number of workers
         print(f"Using {NUM_WORKERS} workers")
         self.directory_list = directory_list
@@ -90,13 +99,8 @@ class VCDataset(Dataset):
             if not os.path.exists(temp_cache_path):
                 safe_write_to_file(self.speaker_cache, temp_cache_path)
                 print(f"Saved speaker cache to {temp_cache_path}")
-
-
-
         
         print(f"Loaded {len(self.files)} files")
-        # # random select 500 files for testing
-        # self.files = random.sample(self.files, 500)
         random.shuffle(self.files)  # Shuffle the files.
 
         self.filtered_files, self.all_num_frames, self.index2numframes, self.index2speaker = self.filter_files()
@@ -110,6 +114,13 @@ class VCDataset(Dataset):
             )
         )
         del self.meta_data_cache, self.speaker_cache
+
+        if self.use_noise:
+            if TRAIN_MODE:
+                self.noise_filenames = self.get_all_flac(args.noise_dir)
+            else:
+                self.noise_filenames = self.get_all_flac(args.test_noise_dir)
+            self.SNR = np.linspace(int(args.snr_lower), int(args.snr_upper), int(args.total_snrlevels))
 
     def process_files(self):
         print(f"Processing metadata...")
@@ -188,6 +199,44 @@ class VCDataset(Dataset):
         print(f"Created speaker2id with {len(speaker2id)} speakers")
         return speaker2id
     
+    def snr_mixer(self, clean, noise, snr):
+        # Normalizing to -25 dB FS
+        rmsclean = (clean**2).mean()**0.5
+        scalarclean = 10 ** (-25 / 20) / rmsclean
+        clean = clean * scalarclean
+        rmsclean = (clean**2).mean()**0.5
+
+        rmsnoise = (noise**2).mean()**0.5
+        scalarnoise = 10 ** (-25 / 20) /rmsnoise
+        noise = noise * scalarnoise
+        rmsnoise = (noise**2).mean()**0.5
+        
+        # Set the noise level for a given SNR
+        noisescalar = np.sqrt(rmsclean / (10**(snr/20)) / rmsnoise)
+        noisenewlevel = noise * noisescalar.cpu().numpy()
+        noisyspeech = clean + noisenewlevel
+        noisyspeech = torch.from_numpy(noisyspeech)
+        return noisyspeech
+    
+    def add_noise(self, clean):
+        # self.noise_filenames: list of noise files
+        # self.SNR: list of SNR = np.linspace(int(snr_lower), int(snr_upper), int(total_snrlevels))
+        random_idx = np.random.randint(0, np.size(self.noise_filenames))
+        noise, _ = librosa.load(self.noise_filenames[random_idx], sr=SAMPLE_RATE)
+        if len(noise)>=len(clean):
+            noise = noise[0:len(clean)] #截取噪声的长度
+        else:
+            while len(noise)<=len(clean): #如果噪声的长度小于语音的长度
+                random_idx = (random_idx + 1)%len(self.noise_filenames) #随机读一个噪声
+                newnoise, fs = librosa.load(self.noise_filenames[random_idx], sr=SAMPLE_RATE)
+                noiseconcat = np.append(noise, np.zeros(int(fs * 0.2)))#在噪声后面加上0.2静音
+                noise = np.append(noiseconcat, newnoise)#拼接噪声
+        noise = noise[0:len(clean)] #截取噪声的长度
+        random_SNR_idx = np.random.randint(0, np.size(self.SNR)) #随机选择一个SNR
+        noisyspeech = self.snr_mixer(clean=clean, noise=noise, snr=self.SNR[random_SNR_idx]) #根据随机的SNR级别，混合生成带噪音频
+        del noise
+        return noisyspeech
+    
     def __len__(self):
         return len(self.files)
 
@@ -216,12 +265,17 @@ class VCDataset(Dataset):
         ref_mask = torch.ones(len(ref_speech) // hop_length)
         mask = torch.ones(len(new_speech) // hop_length)
 
-        return {"speech": new_speech, "ref_speech": ref_speech, "ref_mask": ref_mask, "mask": mask}
-
+        if not self.use_noise:
+            return {"speech": new_speech, "ref_speech": ref_speech, "ref_mask": ref_mask, "mask": mask}
+        else:
+            noisy_ref_speech = self.add_noise(ref_speech)
+            assert len(noisy_ref_speech) == len(ref_speech)
+            return {"speech": new_speech, "ref_speech": ref_speech, "noisy_ref_speech": noisy_ref_speech, "ref_mask": ref_mask, "mask": mask}
 
 class VCCollator(BaseCollator):
     def __init__(self, cfg):
         BaseCollator.__init__(self, cfg)
+        self.use_noise = cfg.trans_exp.use_noise
 
     def __call__(self, batch):
         packed_batch_features = dict()
@@ -252,6 +306,11 @@ class VCCollator(BaseCollator):
         # Process 'speaker_id' data
         speaker_ids = [process_tensor(b['speaker_id'], dtype=torch.int64) for b in batch]
         packed_batch_features['speaker_id'] = torch.stack(speaker_ids, dim=0)
+
+        if self.use_noise:
+            # Process 'noisy_ref_speech' data
+            noisy_ref_speeches = [process_tensor(b['noisy_ref_speech']) for b in batch]
+            packed_batch_features['noisy_ref_speech'] = pad_sequence(noisy_ref_speeches, batch_first=True, padding_value=0)
         return packed_batch_features
 
 

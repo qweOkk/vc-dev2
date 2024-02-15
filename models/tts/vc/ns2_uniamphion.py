@@ -1933,9 +1933,10 @@ class UniAmphionTTS(nn.Module):
 
 
 class UniAmphionVC(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, use_noise = False):
         super().__init__()
         self.cfg = cfg
+        self.use_noise = use_noise
 
         self.reference_encoder = ReferenceEncoder(cfg=cfg.reference_encoder)
         if cfg.diffusion.diff_model_type == "Transformer":
@@ -1975,24 +1976,30 @@ class UniAmphionVC(nn.Module):
         x_ref=None,
         x_mask=None,
         x_ref_mask=None,
-    ):
-        
-        reference_embedding, reference_latent = self.reference_encoder(
+        x_ref_noisy=None,
+    ): 
+        noisy_reference_embedding = None
+        reference_embedding, _ = self.reference_encoder(
             x_ref=x_ref, key_padding_mask=x_ref_mask
         )
+        if self.use_noise:
+            noisy_reference_embedding, _ = self.reference_encoder(
+            x_ref=x_ref_noisy, key_padding_mask=x_ref_mask
+            )
+            combined_reference_embedding = torch.cat([reference_embedding, noisy_reference_embedding], dim=-1)
+        else:
+            combined_reference_embedding = reference_embedding
 
         condition_embedding = torch.cat([content_feature, pitch[:, :, None]], dim=-1)
         condition_embedding = self.content_f0_enc(condition_embedding)
-
 
         diff_out = self.diffusion(
             x=x,
             condition_embedding=condition_embedding,
             x_mask=x_mask,
-            reference_embedding=reference_embedding,
+            reference_embedding=combined_reference_embedding,
         )
-
-        return diff_out
+        return diff_out, reference_embedding, noisy_reference_embedding
 
     @torch.no_grad()
     def inference(

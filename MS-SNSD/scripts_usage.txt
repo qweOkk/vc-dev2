@@ -1,0 +1,20 @@
+resampler.py
+- to resample libritts to 16k and save the resampled wavs to a folder in this directory.
+
+noisyspeech_synthesizer.cfg
+- configs for creating the noisy speech dataset
+
+noisyspeech_synthesizer.py
+- script for crreating the noisy speech dataset
+
+gen_metadata.py
+- script for generating METADATA file
+
+post_process_metadata.py
+- script for removing the path prefix from all files paths in METADATA file
+
+cal_audio_dur.py
+- calculate the total audio duration in seconds of a directory
+
+show_no_spks_from_speakers_stats.py
+- find the number of speakers involved in the noisy dataset creation from speakers_stats_xxx.json

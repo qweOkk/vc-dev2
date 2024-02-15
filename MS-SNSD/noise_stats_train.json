@@ -1,0 +1,23 @@
+{
+    "Car": 1437,
+    "Park": 1837,
+    "Office": 1161,
+    "Construction": 1259,
+    "Siren": 1286,
+    "NeighborSpeaking": 1756,
+    "Mall": 1404,
+    "AirConditioner": 1553,
+    "Babble": 1475,
+    "SqueakyChair": 1717,
+    "WasherDryer": 847,
+    "ShuttingDoor": 1374,
+    "VacuumCleaner": 1317,
+    "Cafe": 1285,
+    "Seawave": 1142,
+    "Metro": 1274,
+    "Munching": 1320,
+    "Footsteps": 1004,
+    "Rain": 1323,
+    "Dog": 1531,
+    "CopyMachine": 1137
+}

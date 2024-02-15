@@ -18,13 +18,10 @@ import scipy.signal as signal
 import soundfile as sf
 import librosa
 
-feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
-model = WavLMForXVector.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
 
 # feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("microsoft/wavlm-base-plus-sv")
 # model = WavLMForXVector.from_pretrained("microsoft/wavlm-base-plus-sv")
-device = torch.device("cuda:5")
-model = model.to(device)
+
 
 
 def WavLM_SV(ge_audio, ref_audio):
@@ -62,6 +59,12 @@ if __name__ == "__main__":
         "-r", "--ref_dir", required=True, help="Reference wave folder or file list."
     )
     parser.add_argument("-d", "--deg_dir", required=True, help="Degraded wave folder.")
+    #gpu_id = 7
+    parser.add_argument("-g", "--gpu", type=int, default=7, help="GPU ID")
     args = parser.parse_args()
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
+    model = WavLMForXVector.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
+    device = torch.device(f"cuda:{args.gpu}")
+    model = model.to(device)
     similarity_score = calculate_speaker_similarity(args.ref_dir, args.deg_dir)
     print(f"Speaker similarity: {similarity_score}")

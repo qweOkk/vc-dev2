@@ -20,6 +20,7 @@ from models.base.base_sampler import VariableSampler
 import random
 from diffusers import get_scheduler
 import torch.nn.functional as F
+import torch.nn as nn
 
 import accelerate
 from accelerate.logging import get_logger
@@ -33,9 +34,15 @@ from models.tts.vc.hubert_kmeans import HubertWithKmeans
 mel_basis = {}
 hann_window = {}
 init_mel_and_hann = False
+cosine_loss = nn.CosineEmbeddingLoss()
 
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
     return torch.log(torch.clamp(x, min=clip_val) * C)
+
+def noise_clean_similarity_loss(ref_emb, noisy_ref_emb):
+    target = torch.tensor([1], dtype=torch.float).to(ref_emb.device)
+    loss = cosine_loss(ref_emb, noisy_ref_emb, target)
+    return loss
 
 def diff_loss(pred, target, mask, loss_type="l1"):
     # pred: (B, T, d)
@@ -137,6 +144,12 @@ class VCTrainer(TTSTrainer):
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger = get_logger(args.exp_name, log_level="INFO")
+        # config noise and speaker
+        self.use_noise = self.cfg.trans_exp.use_noise
+        self.use_speaker = self.cfg.trans_exp.use_speaker
+        if self.accelerator.is_main_process:
+            self.logger.info("use_noise: {}".format(self.use_noise))
+            self.logger.info("use_speaker: {}".format(self.use_speaker))
         self.time_window = ValueWindow(50)
         if self.accelerator.is_main_process:
             self.logger.info("=" * 56)
@@ -315,10 +328,10 @@ class VCTrainer(TTSTrainer):
         # save config file path
         self.config_save_path = os.path.join(self.exp_dir, "args.json")
 
-        # Only for TTS tasks
         self.task_type = "VC"
         if self.accelerator.is_main_process:
             self.logger.info("Task type: {}".format(self.task_type))
+
 
     def _init_accelerator(self):
         self.exp_dir = os.path.join(
@@ -346,7 +359,7 @@ class VCTrainer(TTSTrainer):
 
 
     def _build_model(self):
-        model = UniAmphionVC(cfg=self.cfg.model)
+        model = UniAmphionVC(cfg=self.cfg.model, use_noise = self.use_noise)
         w2v = HubertWithKmeans(
             checkpoint_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3.pt",
             kmeans_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3_L11_km1000.bin",
@@ -358,21 +371,13 @@ class VCTrainer(TTSTrainer):
 
     def _build_dataloader(self):
         if self.cfg.train.use_dynamic_batchsize:
+            np.random.seed(980205)
             if self.accelerator.is_main_process:
                 self.logger.info("Use Dynamic Batchsize......")
 
             # Dataset, Collator = self._build_dataset()
 
-            directory_list = [
-            '/mnt/data2/wangyuancheng/mls_english/dev/audio',
-            '/mnt/data4/hehaorui/medium_15s',
-            '/mnt/data4/hehaorui/small_15s',
-            '/mnt/data2/wangyuancheng/mls_english/train/audio',
-            '/mnt/data4/hehaorui/large_15s',
-            ]
-            random.shuffle(directory_list)
-
-            train_dataset = VCDataset(directory_list)
+            train_dataset = VCDataset(self.cfg.trans_exp, TRAIN_MODE=True)
             train_collate = VCCollator(self.cfg)
             batch_sampler = batch_by_size(
                 train_dataset.num_frame_indices,
@@ -382,7 +387,6 @@ class VCTrainer(TTSTrainer):
                 * self.accelerator.num_processes,
                 required_batch_size_multiple=self.accelerator.num_processes,
             )
-            np.random.seed(980205)
             np.random.shuffle(batch_sampler)
 
             batches = [
@@ -404,7 +408,7 @@ class VCTrainer(TTSTrainer):
             )
             self.accelerator.wait_for_everyone()
 
-            valid_dataset = VCDataset(["/mnt/data2/wangyuancheng/mls_english/test/audio"])
+            valid_dataset = VCDataset(self.cfg.trans_exp, TRAIN_MODE=False)
             valid_collate = VCCollator(self.cfg)
             batch_sampler = batch_by_size(
                 valid_dataset.num_frame_indices,
@@ -432,31 +436,7 @@ class VCTrainer(TTSTrainer):
 
         else:
             self.logger.info("Use Normal Batchsize......")
-            #VCDataset, VCCollator = self._build_dataset()
-            train_dataset = VCDataset(self.cfg, self.cfg.dataset[0], is_valid=False)
-            train_collate = VCCollator(self.cfg)
-
-            train_loader = DataLoader(
-                train_dataset,
-                shuffle=True,
-                collate_fn=train_collate,
-                batch_size=self.cfg.train.batch_size,
-                num_workers=self.cfg.train.dataloader.num_worker,
-                pin_memory=self.cfg.train.dataloader.pin_memory,
-            )
-
-            valid_dataset = VCDataset(self.cfg, self.cfg.dataset[0], is_valid=True)
-            valid_collate = VCCollator(self.cfg)
-
-            valid_loader = DataLoader(
-                valid_dataset,
-                shuffle=True,
-                collate_fn=valid_collate,
-                batch_size=self.cfg.train.batch_size,
-                num_workers=self.cfg.train.dataloader.num_worker,
-                pin_memory=self.cfg.train.dataloader.pin_memory,
-            )
-            self.accelerator.wait_for_everyone()
+            self.logger.info("Exiting......")
 
         return train_loader, valid_loader
 
@@ -520,6 +500,7 @@ class VCTrainer(TTSTrainer):
         self.scheduler.load_state_dict(checkpoint["scheduler"])
 
     def _train_step(self, batch):
+        total_loss = 0.0
         train_losses = {}
         train_stats = {}
         device = self.accelerator.device
@@ -563,17 +544,42 @@ class VCTrainer(TTSTrainer):
             mask = batch["mask"]
             ref_mask = batch["ref_mask"]
 
-        with torch.set_grad_enabled(True):
-            diff_out = self.model(
-            x=mel,
-            content_feature=content_feature,
-            pitch=pitch,
-            x_ref=ref_mel,
-            x_mask=mask,
-            x_ref_mask=ref_mask,
-        )
-        total_loss = 0.0
-
+            if self.use_noise:
+                noisy_ref_mel = mel_spectrogram(
+                    batch["noisy_ref_speech"],
+                    n_fft=1024,
+                    num_mels=80,
+                    sampling_rate=16000,
+                    hop_size=200,
+                    win_size=800,
+                    fmin=0,
+                    fmax=8000,
+                )
+                with torch.set_grad_enabled(True):
+                    diff_out, ref_emb, noisy_ref_emb = self.model(
+                        x=mel,
+                        content_feature=content_feature,
+                        pitch=pitch,
+                        x_ref=ref_mel,
+                        x_mask=mask,
+                        x_ref_mask=ref_mask,
+                        noisy_x_ref=noisy_ref_mel
+                    )
+            else:
+                with torch.set_grad_enabled(True):
+                    diff_out, ref_emb, _ = self.model(
+                            x=mel,
+                            content_feature=content_feature,
+                            pitch=pitch,
+                            x_ref=ref_mel,
+                            x_mask=mask,
+                            x_ref_mask=ref_mask,
+                        )
+        if self.use_noise:
+            diff_ref_similarity_loss = noise_clean_similarity_loss(ref_emb, noisy_ref_emb)
+            total_loss += diff_ref_similarity_loss
+            train_losses["diff_ref_similarity_loss"] = diff_ref_similarity_loss
+        
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
         total_loss += diff_loss_x0
         train_losses["diff_loss_x0"] = diff_loss_x0
@@ -593,15 +599,16 @@ class VCTrainer(TTSTrainer):
         for item in train_losses:
             train_losses[item] = train_losses[item].item()/pitch.shape[0]
 
-        learning_rate = self.optimizer.param_groups[0]['lr']
-        formatted_lr = f"{learning_rate:.1e}"
-        train_losses['lr'] = formatted_lr
+        # learning_rate = self.optimizer.param_groups[0]['lr']
+        # formatted_lr = f"{learning_rate:.1e}"
+        # train_losses['lr'] = formatted_lr
 
         train_losses["batch_size"] = pitch.shape[0]
         return (train_losses["total_loss"], train_losses, train_stats)
 
     @torch.inference_mode()
     def _valid_step(self, batch):
+        total_loss = 0.0
         valid_losses = {}
         valid_stats = {}
         device = self.accelerator.device
@@ -644,15 +651,39 @@ class VCTrainer(TTSTrainer):
             pitch = batch["pitch"]
             mask = batch["mask"]
             ref_mask = batch["ref_mask"]
-            diff_out = self.model(
-                x=mel,
-                content_feature=content_feature,
-                pitch=pitch,
-                x_ref=ref_mel,
-                x_mask=mask,
-                x_ref_mask=ref_mask,
-            )
-        total_loss = 0.0
+            if self.use_noise:
+                noisy_ref_mel = mel_spectrogram(
+                    batch["noisy_ref_speech"],
+                    n_fft=1024,
+                    num_mels=80,
+                    sampling_rate=16000,
+                    hop_size=200,
+                    win_size=800,
+                    fmin=0,
+                    fmax=8000,
+                )
+                diff_out, ref_emb, noisy_ref_emb = self.model(
+                    x=mel,
+                    content_feature=content_feature,
+                    pitch=pitch,
+                    x_ref=ref_mel,
+                    x_mask=mask,
+                    x_ref_mask=ref_mask,
+                    noisy_x_ref=noisy_ref_mel
+                )
+            else:
+               diff_out, ref_emb, _ = self.model(
+                    x=mel,
+                    content_feature=content_feature,
+                    pitch=pitch,
+                    x_ref=ref_mel,
+                    x_mask=mask,
+                    x_ref_mask=ref_mask,
+                )
+        if self.use_noise:
+            diff_ref_similarity_loss = noise_clean_similarity_loss(ref_emb, noisy_ref_emb)
+            total_loss += diff_ref_similarity_loss
+            valid_losses["diff_ref_similarity_loss"] = diff_ref_similarity_loss
 
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
         total_loss += diff_loss_x0
@@ -664,6 +695,8 @@ class VCTrainer(TTSTrainer):
         )
         total_loss += diff_loss_noise 
         valid_losses["diff_loss_noise"] = diff_loss_noise
+
+    
         valid_losses["total_loss"] = total_loss
 
         for item in valid_losses:

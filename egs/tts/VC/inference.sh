@@ -26,6 +26,6 @@ python "${work_dir}"/models/tts/vc/vc_inference.py \
     --config $exp_config \
     --exp_name $exp_name \
     --log_level debug \
-    --checkpoint_path "/mnt/data2/hehaorui/ckpt/vc/ns2_large_test/checkpoint/epoch-0000_step-0172000_loss-0.037911/model.safetensors" \
+    --checkpoint_path "/mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0001_step-0241000_loss-0.048893/model.safetensors" \
     --output_dir "/mnt/data2/hehaorui/vc_test/Results/VCTK" \
     --cuda_id 7 \
