@@ -130,8 +130,8 @@ def main():
 
     temp_id = 0
     for utt_id, utt in tqdm(utt_dict.items()):
-        if temp_id > 10:
-            break
+        # if temp_id > 10:
+        #     break
         temp_id += 1
         # source is the input
         wav_path = utt["source_speech"]

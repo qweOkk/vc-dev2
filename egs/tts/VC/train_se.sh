@@ -18,24 +18,21 @@ python setup.py build_ext --inplace
 cd $work_dir
 
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config.json
+    exp_config="${exp_dir}"/exp_config_6gpu.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="se_vc"
+exp_name="sv_se_vc"
 
 if [ -z "$gpu" ]; then
-    gpu="6"
+    gpu="0,1,2,3,4,5"
 fi
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
-CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
+CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 9999 \
 "${work_dir}"/bins/tts/train.py \
     --config $exp_config \
     --exp_name $exp_name \
-    --log_level debug \
-    --resume \
-    --resume_type resume \
-    --checkpoint_path /mnt/data2/hehaorui/ckpt/vc/ns2_large_test/checkpoint/epoch-0000_step-0172000_loss-0.037911
+    --log_level debug

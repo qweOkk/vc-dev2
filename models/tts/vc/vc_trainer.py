@@ -41,8 +41,36 @@ def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
 
 def noise_clean_similarity_loss(ref_emb, noisy_ref_emb):
     target = torch.tensor([1], dtype=torch.float).to(ref_emb.device)
-    loss = cosine_loss(ref_emb, noisy_ref_emb, target)
+    ref_emb = ref_emb.reshape(ref_emb.size(0), -1) # (B, 32, 512) --> (B, 32 * 512)
+    noisy_ref_emb = noisy_ref_emb.reshape(noisy_ref_emb.size(0), -1) # (B, 32, 512) --> (B, 32 * 512)
+    loss = cosine_loss(ref_emb, noisy_ref_emb, target) + 1e-6
     return loss
+
+def cross_entropy_loss(preds, targets, reduction='none'):
+    log_softmax = nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "none":
+        return loss
+    elif reduction == "mean":
+        return loss.mean()
+    
+class ConstractiveSpeakerLoss(nn.Module):
+    def __init__(self, temperature=1.):
+        super(ConstractiveSpeakerLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, x, speaker_ids):
+        # x : B, C
+        # speaker_ids: B
+        speaker_ids = speaker_ids.reshape(-1)
+        speaker_ids_expand = torch.zeros(len(speaker_ids),len(speaker_ids)).to(speaker_ids.device)
+        speaker_ids_expand = (speaker_ids.view(-1,1) == speaker_ids).float() #形成一个mask
+        x_t = x.transpose(0,1) # B, C --> C,B
+        logits = (x @ x_t) / self.temperature # B, C * C, B --> B, B
+        targets = F.softmax(speaker_ids_expand / self.temperature, dim=-1)
+        loss = cross_entropy_loss(logits, targets, reduction='none')
+        return loss.mean()
+    
 
 def diff_loss(pred, target, mask, loss_type="l1"):
     # pred: (B, T, d)
@@ -329,6 +357,7 @@ class VCTrainer(TTSTrainer):
         self.config_save_path = os.path.join(self.exp_dir, "args.json")
 
         self.task_type = "VC"
+        self.contrastive_speaker_loss = ConstractiveSpeakerLoss()
         if self.accelerator.is_main_process:
             self.logger.info("Task type: {}".format(self.task_type))
 
@@ -555,6 +584,7 @@ class VCTrainer(TTSTrainer):
                     fmin=0,
                     fmax=8000,
                 )
+                noisy_ref_mel = noisy_ref_mel.transpose(1, 2)
                 with torch.set_grad_enabled(True):
                     diff_out, ref_emb, noisy_ref_emb = self.model(
                         x=mel,
@@ -576,16 +606,36 @@ class VCTrainer(TTSTrainer):
                             x_ref_mask=ref_mask,
                         )
         if self.use_noise:
-            diff_ref_similarity_loss = noise_clean_similarity_loss(ref_emb, noisy_ref_emb)
-            total_loss += diff_ref_similarity_loss
-            train_losses["diff_ref_similarity_loss"] = diff_ref_similarity_loss
+            # ref_emb: (B, 32, 512)
+            # noisy_ref_emb: (B, 32, 512)
+            # speaker_ids: (B)
+            speaker_ids = batch["speaker_id"]
+            ref_emb = torch.mean(ref_emb, dim=1) # (B, 512)
+            noisy_speaker_ids = speaker_ids
+            noisy_ref_emb = torch.mean(noisy_ref_emb, dim=1) # (B, 512)
+
+            #get all_ref_emb (B+B, 512)
+            all_ref_emb = torch.cat([ref_emb, noisy_ref_emb], dim=0)
+            assert all_ref_emb.shape[0] == speaker_ids.shape[0] * 2
+            #get all_speaker_ids (B+B)
+            all_speaker_ids = torch.cat([speaker_ids, noisy_speaker_ids], dim=0)
+            assert all_speaker_ids.shape[0] == speaker_ids.shape[0] * 2
+            #get contrastive_speaker_loss
+            cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
+            total_loss += cs_loss
+            #print("total_loss: ", total_loss.item())
+            train_losses["contrastive_speaker_loss"] = cs_loss
         
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
+        #print("diff_loss_x0: ", diff_loss_x0.item())
         total_loss += diff_loss_x0
+        #print("total_loss: ", total_loss.item())
         train_losses["diff_loss_x0"] = diff_loss_x0
 
         diff_loss_noise = diff_loss(diff_out["noise_pred"], diff_out["noise"], mask=mask)
+        #print("diff_loss_noise: ", diff_loss_noise.item())
         total_loss += diff_loss_noise 
+        #print("total_loss: ", total_loss.item())
         train_losses["diff_loss_noise"] = diff_loss_noise
         train_losses["total_loss"] = total_loss
 
@@ -599,9 +649,9 @@ class VCTrainer(TTSTrainer):
         for item in train_losses:
             train_losses[item] = train_losses[item].item()/pitch.shape[0]
 
-        # learning_rate = self.optimizer.param_groups[0]['lr']
-        # formatted_lr = f"{learning_rate:.1e}"
-        # train_losses['lr'] = formatted_lr
+        learning_rate = self.optimizer.param_groups[0]['lr']
+        formatted_lr = f"{learning_rate:.1e}"
+        train_losses['learning_rate'] = formatted_lr
 
         train_losses["batch_size"] = pitch.shape[0]
         return (train_losses["total_loss"], train_losses, train_stats)
@@ -662,6 +712,7 @@ class VCTrainer(TTSTrainer):
                     fmin=0,
                     fmax=8000,
                 )
+                noisy_ref_mel = noisy_ref_mel.transpose(1, 2)
                 diff_out, ref_emb, noisy_ref_emb = self.model(
                     x=mel,
                     content_feature=content_feature,
@@ -681,9 +732,27 @@ class VCTrainer(TTSTrainer):
                     x_ref_mask=ref_mask,
                 )
         if self.use_noise:
-            diff_ref_similarity_loss = noise_clean_similarity_loss(ref_emb, noisy_ref_emb)
-            total_loss += diff_ref_similarity_loss
-            valid_losses["diff_ref_similarity_loss"] = diff_ref_similarity_loss
+            # ref_emb: (B, 32, 512)
+            # noisy_ref_emb: (B, 32, 512)
+            # speaker_ids: (B)
+            speaker_ids = batch["speaker_id"]
+            ref_emb = torch.mean(ref_emb, dim=1) # (B, 512)
+            noisy_speaker_ids = speaker_ids
+            noisy_ref_emb = torch.mean(noisy_ref_emb, dim=1) # (B, 512)
+
+            #get all_ref_emb (B+B, 512)
+            all_ref_emb = torch.cat([ref_emb, noisy_ref_emb], dim=0)
+            
+            #get all_speaker_ids (B+B)
+            all_speaker_ids = torch.cat([speaker_ids, noisy_speaker_ids], dim=0)
+            #get contrastive _speaker_loss
+            cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
+            total_loss += cs_loss
+            valid_losses["contrastive_speaker_loss"] = cs_loss
+            
+            # diff_ref_similarity_loss = noise_clean_similarity_loss(ref_emb, noisy_ref_emb)
+            # total_loss += diff_ref_similarity_loss
+            # valid_losses["diff_ref_similarity_loss"] = diff_ref_similarity_loss
 
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
         total_loss += diff_loss_x0

@@ -49,9 +49,9 @@ class VCDataset(Dataset):
             directory_list = args.test_directory_list
         random.shuffle(directory_list)
 
-        print(args)
         self.use_speaker = args.use_speaker
-        self.use_noise = args.use_noise     
+        self.use_noise = args.use_noise  
+        print(f"Using speaker: {self.use_speaker}, using noise: {self.use_noise}")   
         # number of workers
         print(f"Using {NUM_WORKERS} workers")
         self.directory_list = directory_list
@@ -87,10 +87,10 @@ class VCDataset(Dataset):
             self.files.extend(files)
             del files
             print(f"Now {len(self.files)} files")
+            # if len(self.speaker_cache) == 22991829 and len(self.metadata_cache) == 22991829:
+            #     break
             self.meta_data_cache = self.process_files()
             self.speaker_cache = self.process_speakers()
-            # for each directory, save a backup for the metadata and speaker cache
-            # modify the file path to save the cache
             temp_cache_path = self.metadata_cache_path.replace('.json', f'_{directory.split("/")[-1]}.json')
             if not os.path.exists(temp_cache_path):
                 safe_write_to_file(self.meta_data_cache, temp_cache_path)
@@ -213,16 +213,17 @@ class VCDataset(Dataset):
         
         # Set the noise level for a given SNR
         noisescalar = np.sqrt(rmsclean / (10**(snr/20)) / rmsnoise)
-        noisenewlevel = noise * noisescalar.cpu().numpy()
+        noisenewlevel = noise * noisescalar
         noisyspeech = clean + noisenewlevel
-        noisyspeech = torch.from_numpy(noisyspeech)
-        return noisyspeech
+        noisyspeech_tensor = torch.tensor(noisyspeech, dtype=torch.float32)
+        return noisyspeech_tensor
     
     def add_noise(self, clean):
         # self.noise_filenames: list of noise files
         # self.SNR: list of SNR = np.linspace(int(snr_lower), int(snr_upper), int(total_snrlevels))
         random_idx = np.random.randint(0, np.size(self.noise_filenames))
         noise, _ = librosa.load(self.noise_filenames[random_idx], sr=SAMPLE_RATE)
+        clean = clean.cpu().numpy()
         if len(noise)>=len(clean):
             noise = noise[0:len(clean)] #截取噪声的长度
         else:
@@ -269,7 +270,6 @@ class VCDataset(Dataset):
             return {"speech": new_speech, "ref_speech": ref_speech, "ref_mask": ref_mask, "mask": mask}
         else:
             noisy_ref_speech = self.add_noise(ref_speech)
-            assert len(noisy_ref_speech) == len(ref_speech)
             return {"speech": new_speech, "ref_speech": ref_speech, "noisy_ref_speech": noisy_ref_speech, "ref_mask": ref_mask, "mask": mask}
 
 class VCCollator(BaseCollator):

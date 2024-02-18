@@ -38,4 +38,4 @@ CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
     --log_level debug \
     --resume \
     --resume_type resume \
-    --checkpoint_path /mnt/data2/hehaorui/ckpt/vc/ns2_large_test/checkpoint/epoch-0000_step-0172000_loss-0.037911
+    --checkpoint_path /mnt/data2/hehaorui/ckpt/zero-shot/epoch-0000_step-0172000_loss-0.037911

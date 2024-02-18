@@ -1976,7 +1976,7 @@ class UniAmphionVC(nn.Module):
         x_ref=None,
         x_mask=None,
         x_ref_mask=None,
-        x_ref_noisy=None,
+        noisy_x_ref=None,
     ): 
         noisy_reference_embedding = None
         reference_embedding, _ = self.reference_encoder(
@@ -1984,9 +1984,9 @@ class UniAmphionVC(nn.Module):
         )
         if self.use_noise:
             noisy_reference_embedding, _ = self.reference_encoder(
-            x_ref=x_ref_noisy, key_padding_mask=x_ref_mask
+            x_ref=noisy_x_ref, key_padding_mask=x_ref_mask
             )
-            combined_reference_embedding = torch.cat([reference_embedding, noisy_reference_embedding], dim=-1)
+            combined_reference_embedding = (noisy_reference_embedding + reference_embedding) / 2
         else:
             combined_reference_embedding = reference_embedding
 
