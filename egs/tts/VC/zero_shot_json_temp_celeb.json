@@ -1,0 +1,64 @@
+{
+    "test_cases": [
+        {
+            "uid": "p246_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p246_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_0_billgate_0.wav"
+        },
+        {
+            "uid": "p265_006",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p265_006.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_0_satya_0.wav"
+        },
+        {
+            "uid": "p248_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p248_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_1_billgate_0.wav"
+        },
+        {
+            "uid": "p227_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p227_001.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_1_satya_0.wav"
+        },
+        {
+            "uid": "p239_002",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p239_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_2_billgate_0.wav"
+        },
+        {
+            "uid": "p253_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p253_001.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_2_satya_0.wav"
+        },
+        {
+            "uid": "p251_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p251_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_3_billgate_0.wav"
+        },
+        {
+            "uid": "p247_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p247_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_3_satya_0.wav"
+        },
+        {
+            "uid": "p241_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p241_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_4_billgate_0.wav"
+        },
+        {
+            "uid": "p251_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p251_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_4_satya_0.wav"
+        },
+        {
+            "uid": "p245_002",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p245_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_5_billgate_0.wav"
+        },
+        {
+            "uid": "p256_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//source/p256_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/satya_and_gates//prompt/denoised_5_satya_0.wav"
+        }
+    ]
+}

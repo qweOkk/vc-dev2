@@ -1,0 +1,112 @@
+{
+    "test_cases": [
+        {
+            "uid": "p258_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p258_004.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p286_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/biden_1.wav"
+        },
+        {
+            "uid": "p238_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p238_005.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p310_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/biden_2.wav"
+        },
+        {
+            "uid": "p254_002",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p254_002.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p288_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/darth_vader.wav"
+        },
+        {
+            "uid": "p263_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p263_001.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p269_001.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/dolly_parton.wav"
+        },
+        {
+            "uid": "p257_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p257_005.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p280_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/guo_de_gang.wav"
+        },
+        {
+            "uid": "p232_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p232_003.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p297_001.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/guod_de_gang_en.wav"
+        },
+        {
+            "uid": "p241_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p241_005.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p294_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/musk_1.wav"
+        },
+        {
+            "uid": "p230_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p230_001.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p287_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/musk_2.wav"
+        },
+        {
+            "uid": "p264_002",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p264_002.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p282_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/obama_0.wav"
+        },
+        {
+            "uid": "p228_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p228_004.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p294_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/reese_witherspoon.wav"
+        },
+        {
+            "uid": "p262_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p262_001.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p285_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/sam_altman_1.wav"
+        },
+        {
+            "uid": "p243_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p243_005.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p300_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/sam_altman_2.wav"
+        },
+        {
+            "uid": "p251_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p251_001.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p278_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/spongebob.wav"
+        },
+        {
+            "uid": "p255_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p255_004.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p295_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/talyor_swift.wav"
+        },
+        {
+            "uid": "p245_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p245_001.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p274_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/the_little_mermaid.wav"
+        },
+        {
+            "uid": "p249_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p249_003.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p281_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/theresa_may.wav"
+        },
+        {
+            "uid": "p243_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p243_001.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p310_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/trump_1.wav"
+        },
+        {
+            "uid": "p258_002",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p258_002.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p271_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/trump_2.wav"
+        }
+    ]
+}

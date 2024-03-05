@@ -1,0 +1,54 @@
+{
+    "test_cases": [
+        {
+            "uid": "p246_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p246_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/0.wav"
+        },
+        {
+            "uid": "p265_006",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p265_006.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/1.wav"
+        },
+        {
+            "uid": "p248_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p248_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/2.wav"
+        },
+        {
+            "uid": "p227_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p227_001.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/3.wav"
+        },
+        {
+            "uid": "p239_002",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p239_002.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/4.wav"
+        },
+        {
+            "uid": "p253_001",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p253_001.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/5.wav"
+        },
+        {
+            "uid": "p251_005",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p251_005.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/6.wav"
+        },
+        {
+            "uid": "p247_004",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p247_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/7.wav"
+        },
+        {
+            "uid": "p241_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p241_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/8.wav"
+        },
+        {
+            "uid": "p251_003",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/source/p251_003.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/TEMP/prompt/9.wav"
+        }
+    ]
+}

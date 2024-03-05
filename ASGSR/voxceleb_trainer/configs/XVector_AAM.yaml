@@ -1,0 +1,11 @@
+model: XVector
+log_input: True
+trainfunc: aamsoftmax
+save_path: exps/XVector_AAM
+eval_frames: 400
+max_frames: 300
+batch_size: 400
+lr_decay: 0.75
+weight_decay: 5e-05
+max_seg_per_spk: 500
+augment: True

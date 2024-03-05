@@ -26,8 +26,10 @@ python "${work_dir}"/models/tts/vc/vc_inference.py \
     --config $exp_config \
     --exp_name $exp_name \
     --log_level debug \
-    --checkpoint_path "/mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0001_step-0400000_loss-0.037989/model.safetensors" \
-    --output_dir "/mnt/data2/hehaorui/vc_test/Results/VCTK" \
-    --cuda_id 7 \
+    --checkpoint_path "/mnt/data2/hehaorui/ckpt/vc/sv_se_vc/checkpoint/epoch-0002_step-0749000_loss-0.136304/model.safetensors" \
+    --output_dir "/mnt/data2/hehaorui/vc_test/Results/VCTK_clean_our" \
+    --cuda_id 0 \
 
 #/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0000_step-0100000_loss-0.078911/
+#/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0001_step-0400000_loss-0.037989/
+#/mnt/data2/hehaorui/ckpt/vc/sv_se_vc/checkpoint/epoch-0001_step-0344000_loss-0.152027

@@ -1,0 +1,7 @@
+model: ECAPATDNN
+trainfunc: amsoftmax
+save_path: exps/ECAPATDNN
+batch_size: 400
+scale: 30
+margin: 0.3
+augment: True

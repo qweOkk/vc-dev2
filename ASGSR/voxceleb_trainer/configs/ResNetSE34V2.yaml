@@ -1,0 +1,9 @@
+model: ResNetSE34V2
+log_input: True
+encoder_type: ASP
+n_mels: 64
+trainfunc: softmaxproto
+save_path: exps/ResNetSE34V2
+eval_frames: 400
+nLcasses: 5994
+batch_size: 200

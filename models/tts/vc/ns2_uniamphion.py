@@ -2043,6 +2043,14 @@ class UniAmphionVC(nn.Module):
         )
 
         return x0
+    
+    @torch.no_grad()
+    def sv_inference(self, x_ref=None, x_ref_mask=None):
+        reference_embedding, _ = self.reference_encoder(
+            x_ref=x_ref, key_padding_mask=x_ref_mask
+        )
+        return reference_embedding
+
 
     def reset_parameters(self):
         def _reset_parameters(m):

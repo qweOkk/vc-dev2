@@ -12,7 +12,8 @@ from models.base.base_dataset import (
 from multiprocessing import Pool, Lock
 import random
 import torchaudio
-import random
+import rir_generator as rir
+
 
 NUM_WORKERS = 200
 lock = Lock()  # 创建一个全局锁
@@ -129,7 +130,7 @@ class VCDataset(Dataset):
             with Pool(processes=NUM_WORKERS) as pool:
                 results = list(tqdm(pool.imap_unordered(get_metadata, files_to_process), total=len(files_to_process)))
             for file, num_frames in results:
-                self.metadata_cache[file] = num_frames
+                self.metadata_cache[file] = num_frames 
             safe_write_to_file(self.metadata_cache, self.metadata_cache_path)
         else:
             print(f"Skipping processing metadata, loaded {len(self.metadata_cache)} files")
@@ -202,9 +203,10 @@ class VCDataset(Dataset):
     def snr_mixer(self, clean, noise, snr):
         # Normalizing to -25 dB FS
         rmsclean = (clean**2).mean()**0.5
+        epsilon = 1e-10
+        rmsclean = max(rmsclean, epsilon)
         scalarclean = 10 ** (-25 / 20) / rmsclean
         clean = clean * scalarclean
-        rmsclean = (clean**2).mean()**0.5
 
         rmsnoise = (noise**2).mean()**0.5
         scalarnoise = 10 ** (-25 / 20) /rmsnoise
@@ -233,10 +235,39 @@ class VCDataset(Dataset):
                 noiseconcat = np.append(noise, np.zeros(int(fs * 0.2)))#在噪声后面加上0.2静音
                 noise = np.append(noiseconcat, newnoise)#拼接噪声
         noise = noise[0:len(clean)] #截取噪声的长度
-        random_SNR_idx = np.random.randint(0, np.size(self.SNR)) #随机选择一个SNR
-        noisyspeech = self.snr_mixer(clean=clean, noise=noise, snr=self.SNR[random_SNR_idx]) #根据随机的SNR级别，混合生成带噪音频
+        #随机选择一个SNR {0,5,10,15,20}
+        snr = np.random.choice([0,5,10,15,20])
+        noisyspeech = self.snr_mixer(clean=clean, noise=noise, snr=snr) #根据随机的SNR级别，混合生成带噪音频
         del noise
         return noisyspeech
+    
+    def add_reverb(self, speech):
+        room_dim = [np.random.uniform(1, 12) for _ in range(3)]  # [length, width, height]
+        # 随机选择麦克风位置
+        mic_pos = [np.random.uniform(0, dim) for dim in room_dim]
+        # 确定声源与麦克风的距离
+        distance = np.random.normal(2, 4)
+        while distance <= 0 or distance > 5:
+            distance = np.random.normal(2, 4)
+        # 随机选择声源位置，确保它在以麦克风为中心的球内
+        # 这里简化处理，直接使用距离而不是精确计算位置
+        source_pos = [mic_pos[0] + distance, mic_pos[1], mic_pos[2]]
+        # 随机选择RT60值
+        rt60 = np.random.uniform(0.05, 1.0)
+        rir_filter = rir.generate(
+            c=340,                  # 声速
+            fs=SAMPLE_RATE,
+            r=[mic_pos],            # 麦克风位置
+            s=source_pos,           # 声源位置
+            L=room_dim,             # 房间尺寸
+            reverberation_time=rt60,# RT60值
+            nsample=4096,           # IR长度
+        )
+        # 应用混响
+        speech_reverb = np.convolve(speech.cpu().numpy(), rir_filter[:, 0], mode='same')
+        assert len(speech_reverb) == len(speech)
+        speech = torch.tensor(speech_reverb, dtype=torch.float32)
+        return speech
     
     def __len__(self):
         return len(self.files)
@@ -269,7 +300,12 @@ class VCDataset(Dataset):
         if not self.use_noise:
             return {"speech": new_speech, "ref_speech": ref_speech, "ref_mask": ref_mask, "mask": mask}
         else:
-            noisy_ref_speech = self.add_noise(ref_speech)
+            # 50%的概率添加混响
+            if random.random() < 0.5:
+                reverb_ref_speech = self.add_reverb(ref_speech)
+            else:
+                reverb_ref_speech = ref_speech
+            noisy_ref_speech = self.add_noise(reverb_ref_speech) # 添加噪声
             return {"speech": new_speech, "ref_speech": ref_speech, "noisy_ref_speech": noisy_ref_speech, "ref_mask": ref_mask, "mask": mask}
 
 class VCCollator(BaseCollator):

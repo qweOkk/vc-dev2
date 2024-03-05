@@ -30,7 +30,7 @@
         },
         "use_dynamic_batchsize": true,
         "batch_size": 8,
-        "max_tokens": 1600000,
+        "max_tokens": 2400000,
         "max_sentences": 64,
         "lr_warmup_steps": 5000,
         "lr_scheduler": "cosine",
@@ -39,16 +39,16 @@
   "trans_exp": {
     "directory_list":[
       "/mnt/data2/wangyuancheng/mls_english/dev/audio",
-      // "/mnt/data4/hehaorui/medium_15s",
-      // "/mnt/data4/hehaorui/small_15s",
-      // "/mnt/data2/wangyuancheng/mls_english/train/audio",
-      // "/mnt/data4/hehaorui/large_15s"
+      "/mnt/data4/hehaorui/medium_15s",
+      "/mnt/data4/hehaorui/small_15s",
+      "/mnt/data2/wangyuancheng/mls_english/train/audio",
+      "/mnt/data4/hehaorui/large_15s"
       ],
     "test_directory_list": [
       "/mnt/data2/wangyuancheng/mls_english/test/audio"
     ],
     "use_speaker": false,
-    "use_noise": true,
+    "use_noise": false,
     "snr_lower": 2,
     "snr_upper": 42,
     "total_snrlevels": 5, 

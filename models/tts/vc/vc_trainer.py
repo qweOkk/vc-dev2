@@ -7,7 +7,6 @@ import os
 import shutil
 import json
 import json5
-import time
 import torch
 import pyworld as pw
 import numpy as np
@@ -17,7 +16,6 @@ from torch.utils.data import DataLoader
 from models.tts.base.tts_trainer import TTSTrainer
 from models.base.base_sampler import VariableSampler
 
-import random
 from diffusers import get_scheduler
 import torch.nn.functional as F
 import torch.nn as nn
@@ -60,13 +58,13 @@ class ConstractiveSpeakerLoss(nn.Module):
         self.temperature = temperature
 
     def forward(self, x, speaker_ids):
-        # x : B, C
+        # x : B, H
         # speaker_ids: B
         speaker_ids = speaker_ids.reshape(-1)
         speaker_ids_expand = torch.zeros(len(speaker_ids),len(speaker_ids)).to(speaker_ids.device)
         speaker_ids_expand = (speaker_ids.view(-1,1) == speaker_ids).float() #形成一个mask
         x_t = x.transpose(0,1) # B, C --> C,B
-        logits = (x @ x_t) / self.temperature # B, C * C, B --> B, B
+        logits = (x @ x_t) / self.temperature # B, H * H, B --> B, B
         targets = F.softmax(speaker_ids_expand / self.temperature, dim=-1)
         loss = cross_entropy_loss(logits, targets, reduction='none')
         return loss.mean()
@@ -160,6 +158,7 @@ def extract_world_f0(speech):
         f0s.append(f0[:frame_num])
     f0s = torch.stack(f0s, dim=0).float()
     return f0s
+
 
 class VCTrainer(TTSTrainer):
     def __init__(self, args, cfg):
@@ -622,8 +621,8 @@ class VCTrainer(TTSTrainer):
             assert all_speaker_ids.shape[0] == speaker_ids.shape[0] * 2
             #get contrastive_speaker_loss
             cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
+            cs_loss = cs_loss * 0.2 # scale the loss
             total_loss += cs_loss
-            #print("total_loss: ", total_loss.item())
             train_losses["contrastive_speaker_loss"] = cs_loss
         
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
@@ -647,7 +646,7 @@ class VCTrainer(TTSTrainer):
         self.scheduler.step()
 
         for item in train_losses:
-            train_losses[item] = train_losses[item].item()/pitch.shape[0]
+            train_losses[item] = train_losses[item].item()
 
         learning_rate = self.optimizer.param_groups[0]['lr']
         formatted_lr = f"{learning_rate:.1e}"
@@ -747,6 +746,7 @@ class VCTrainer(TTSTrainer):
             all_speaker_ids = torch.cat([speaker_ids, noisy_speaker_ids], dim=0)
             #get contrastive _speaker_loss
             cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
+            cs_loss = cs_loss * 0.2 # scale the loss
             total_loss += cs_loss
             valid_losses["contrastive_speaker_loss"] = cs_loss
             
@@ -769,7 +769,7 @@ class VCTrainer(TTSTrainer):
         valid_losses["total_loss"] = total_loss
 
         for item in valid_losses:
-            valid_losses[item] = valid_losses[item].item()/pitch.shape[0]
+            valid_losses[item] = valid_losses[item].item()
 
         valid_losses["batch_size"] = pitch.shape[0]
         return (valid_losses["total_loss"], valid_losses, valid_stats)

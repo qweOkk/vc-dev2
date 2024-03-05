@@ -1,0 +1,10 @@
+model: XVector
+log_input: True
+trainfunc: amsoftmax
+save_path: exps/XVector_Aug
+batch_size: 400
+scale: 30
+margin: 0.3
+augment: True
+nDataLoaderThread: 16
+

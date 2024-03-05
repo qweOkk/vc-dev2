@@ -35,4 +35,7 @@ CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 9999 \
 "${work_dir}"/bins/tts/train.py \
     --config $exp_config \
     --exp_name $exp_name \
-    --log_level debug
+    --log_level debug \
+    --resume \
+    --resume_type resume \
+    --checkpoint_path /mnt/data2/hehaorui/ckpt/zero-shot/epoch-0000_step-0172000_loss-0.037911

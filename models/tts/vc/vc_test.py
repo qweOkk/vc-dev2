@@ -43,7 +43,15 @@ def calculate_speaker_similarity(ref_dir, deg_dir):
         raise RuntimeError(f"Found no wavs in {deg_dir}")
     similarity_scores = []
     for deg_wav in tqdm(deg_files):
-        ref_wav = os.path.join(ref_dir, os.path.basename(deg_wav))  #
+        deg_wav_file_name = os.path.basename(deg_wav)# recon_p251_004_generated_e2e.wav
+        # --> p251_004_generated_e2e.wav
+        deg_wav_file_name = deg_wav_file_name.split("_")[1:]
+        deg_wav_file_name = "_".join(deg_wav_file_name)
+        # --> target_p251_004_generated_e2e.wav
+        ref_wav_file_name = "target_" + deg_wav_file_name
+        ref_wav = os.path.join(ref_dir, ref_wav_file_name)  #
+        # print(deg_wav)
+        # print(ref_wav)
         if os.path.exists(ref_wav) == False:
             continue
         ref, _ = librosa.load(ref_wav, sr=16000)

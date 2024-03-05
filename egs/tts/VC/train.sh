@@ -18,14 +18,14 @@ python setup.py build_ext --inplace
 cd $work_dir
 
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config.json
+    exp_config="${exp_dir}"/exp_config_2gpu.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
 exp_name="resume_vc_train"
 
 if [ -z "$gpu" ]; then
-    gpu="0,1,2,3,4,5"
+    gpu="4,5,6"
 fi
 
 ######## Train Model ###########
@@ -38,4 +38,4 @@ CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
     --log_level debug \
     --resume \
     --resume_type resume \
-    --checkpoint_path /mnt/data2/hehaorui/ckpt/zero-shot/epoch-0000_step-0172000_loss-0.037911
+    --checkpoint_path /mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0001_step-0400000_loss-0.037989

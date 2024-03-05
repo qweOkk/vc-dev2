@@ -1,0 +1,14 @@
+model: ECAPATDNN
+trainfunc: aamsoftmax
+save_path: exps/ECAPATDNN_AAM
+batch_size: 400
+eval_frames: 400
+max_frames: 300
+lr_decay: 0.75
+weight_decay: 5e-05
+max_seg_per_spk: 500
+augment: True
+nOut: 192
+lr: 0.001
+margin: 0.1
+scale: 30
