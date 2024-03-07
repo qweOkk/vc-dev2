@@ -12,7 +12,7 @@ from einops.layers.torch import Rearrange
 
 sr = 16000
 MAX_WAV_VALUE = 32768.0
-
+from models.tts.vc.vc_loss import AMSoftmaxLoss
 
 def dynamic_range_compression(x, C=1, clip_val=1e-5):
     return np.log(np.clip(x, a_min=clip_val, a_max=None) * C)
@@ -1933,11 +1933,12 @@ class UniAmphionTTS(nn.Module):
 
 
 class UniAmphionVC(nn.Module):
-    def __init__(self, cfg, use_noise = False):
+    def __init__(self, cfg, use_noise = False, use_speaker = False, speaker_num = None):
         super().__init__()
         self.cfg = cfg
         self.use_noise = use_noise
-
+        self.use_speaker = use_speaker
+        
         self.reference_encoder = ReferenceEncoder(cfg=cfg.reference_encoder)
         if cfg.diffusion.diff_model_type == "Transformer":
             self.diffusion = Diffusion(
@@ -1955,7 +1956,7 @@ class UniAmphionVC(nn.Module):
         self.content_f0_enc = nn.Sequential(
             nn.LayerNorm(
                 cfg.vc_feature.content_feature_dim + 1
-            ),  # 1024 (for Wav2Vec2-XLS-R) + 1 (for f0)
+            ),  # 768 (for mhubert) + 1 (for f0)
             Rearrange("b t d -> b d t"),
             nn.Conv1d(
                 cfg.vc_feature.content_feature_dim + 1,
@@ -1965,6 +1966,10 @@ class UniAmphionVC(nn.Module):
             ),
             Rearrange("b d t -> b t d"),
         )
+
+        # speaker embedding layer
+        if self.use_speaker:
+            self.speaker_lookup = AMSoftmaxLoss(cfg.reference_encoder.ref_out_dim, speaker_num)
 
         self.reset_parameters()
 
@@ -1976,6 +1981,7 @@ class UniAmphionVC(nn.Module):
         x_ref=None,
         x_mask=None,
         x_ref_mask=None,
+        x_speaker = None,
         noisy_x_ref=None,
     ): 
         noisy_reference_embedding = None
@@ -1999,7 +2005,12 @@ class UniAmphionVC(nn.Module):
             x_mask=x_mask,
             reference_embedding=combined_reference_embedding,
         )
-        return diff_out, reference_embedding, noisy_reference_embedding
+        if self.use_speaker:
+            speaker_embedding = torch.mean(reference_embedding, dim=1)
+            am_loss = self.speaker_lookup_forward(speaker_embedding, x_speaker)
+        else:
+            am_loss = None
+        return diff_out, reference_embedding, noisy_reference_embedding, am_loss
 
     @torch.no_grad()
     def inference(
@@ -2011,7 +2022,7 @@ class UniAmphionVC(nn.Module):
         inference_steps=1000,
         sigma=1.2,
     ):
-        reference_embedding, reference_latent = self.reference_encoder(
+        reference_embedding, _ = self.reference_encoder(
             x_ref=x_ref, key_padding_mask=x_ref_mask
         )
 
@@ -2044,13 +2055,18 @@ class UniAmphionVC(nn.Module):
 
         return x0
     
+    def speaker_lookup_forward(self, x, label):
+        # x: (B, d) speaker representation
+        # label: (B) speaker label
+        am_loss = self.speaker_lookup(x, label)
+        return am_loss
+    
     @torch.no_grad()
     def sv_inference(self, x_ref=None, x_ref_mask=None):
         reference_embedding, _ = self.reference_encoder(
             x_ref=x_ref, key_padding_mask=x_ref_mask
         )
         return reference_embedding
-
 
     def reset_parameters(self):
         def _reset_parameters(m):

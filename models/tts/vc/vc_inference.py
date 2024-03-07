@@ -122,8 +122,8 @@ def main():
         utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"]
 
     # if output_dir exists, delete it
-    # if os.path.exists(args.output_dir):
-    #     os.system(f"rm -r {args.output_dir}")
+    if os.path.exists(args.output_dir):
+        os.system(f"rm -r {args.output_dir}")
     os.makedirs(args.output_dir, exist_ok=True)
     test_cases = []
 
@@ -134,9 +134,10 @@ def main():
 
     temp_id = 0
     for utt_id, utt in tqdm(utt_dict.items()):
-        # if temp_id > 10:
-        #     break
         temp_id += 1
+        if temp_id < 18:
+            continue
+
         # source is the input
         wav_path = utt["source_speech"]
         wav, _ = librosa.load(wav_path, sr=16000)
@@ -157,7 +158,7 @@ def main():
         ref_wav = np.pad(ref_wav, (0, 200 - len(ref_wav) % 200))
         ref_audio = torch.from_numpy(ref_wav).to(args.local_rank)
         ref_audio = ref_audio[None, :]
-        print(ref_audio.shape)
+
         with torch.no_grad():
             ref_mel = mel_spectrogram(
                 ref_audio,
@@ -189,11 +190,8 @@ def main():
                 fmin=0,
                 fmax=8000,
             )
-            print(ref_mel.shape)
             ref_mel = ref_mel.transpose(1, 2).to(device=args.local_rank)
-            print(ref_mel.shape)
             ref_mask = torch.ones(ref_mel.shape[0], ref_mel.shape[1]).to(args.local_rank)
-            print(ref_mask.shape)
 
             _, content_feature = w2v(audio)
             content_feature = content_feature.to(device=args.local_rank)
@@ -236,15 +234,12 @@ def main():
     os.system(
         f"python /home/hehaorui/code/Amphion/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/recon/mel'} --output_dir={f'{args.output_dir}/recon/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000 --gpu {args.cuda_id}"
     )
-
     os.system(
         f"python /home/hehaorui/code/Amphion/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/target/mel'} --output_dir={f'{args.output_dir}/target/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000 --gpu {args.cuda_id}"
     )
-    torch.cuda.empty_cache()
     os.system(
         f"python /home/hehaorui/code/Amphion/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/source/mel'} --output_dir={f'{args.output_dir}/source/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000 --gpu {args.cuda_id}"
     )
-    torch.cuda.empty_cache()
     os.system(
         f"python /home/hehaorui/code/Amphion/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/prompt/mel'} --output_dir={f'{args.output_dir}/prompt/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000 --gpu {args.cuda_id}"
     )

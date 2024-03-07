@@ -107,6 +107,18 @@
             "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/p258_002.wav",
             "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p271_005.wav",
             "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/trump_2.wav"
+        },
+	{
+            "uid": "canto_source",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/canto.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p310_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/ref_11.wav"
+	},
+        {
+            "uid": "english_source",
+            "source_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/source/english.wav",
+            "target_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/gt/p310_004.wav",
+            "prompt_wav_path": "/mnt/data2/hehaorui/vc_test/Celeb/prompt/ref_11.wav"
         }
     ]
 }

@@ -275,7 +275,7 @@ class TTSTrainer(BaseTrainer):
 
     def _build_scheduler(self):
         pass
-
+    
     def _load_model(self, checkpoint_dir, checkpoint_path=None, resume_type="resume"):
         """Load model from checkpoint. If a folder is given, it will
         load the latest checkpoint in checkpoint_dir. If a path is given
@@ -290,9 +290,52 @@ class TTSTrainer(BaseTrainer):
             self.logger.info("Load model from {}".format(checkpoint_path))
         print("Load model from {}".format(checkpoint_path))
         if resume_type == "resume":
-            self.accelerator.load_state(checkpoint_path)
             self.epoch = int(checkpoint_path.split("_")[-3].split("-")[-1]) + 1
             self.step = int(checkpoint_path.split("_")[-2].split("-")[-1]) + 1
+            self.accelerator.load_state(checkpoint_path)
+        elif resume_type == "partial_resume":
+            self.epoch = int(checkpoint_path.split("_")[-3].split("-")[-1]) + 1
+            self.step = int(checkpoint_path.split("_")[-2].split("-")[-1]) + 1
+            if isinstance(self.model, dict):
+                for idx, sub_model in enumerate(self.model.keys()):
+                    try:
+                        if idx == 0:
+                            ckpt_name = "pytorch_model.bin"
+                        else:
+                            ckpt_name = "pytorch_model_{}.bin".format(idx)
+
+                        self.model[sub_model].load_state_dict(
+                            torch.load(os.path.join(checkpoint_path, ckpt_name))
+                        )
+                    except:
+                        if idx == 0:
+                            ckpt_name = "model.safetensors"
+                        else:
+                            ckpt_name = "model_{}.safetensors".format(idx)
+
+                        accelerate.load_checkpoint_and_dispatch(
+                            self.accelerator.unwrap_model(self.model[sub_model]),
+                            os.path.join(checkpoint_path, ckpt_name),
+                        )
+
+                self.model[sub_model].cuda(self.accelerator.device)
+            else:
+                try:
+                    self.model.load_state_dict(
+                        torch.load(os.path.join(checkpoint_path, "pytorch_model.bin"))
+                    )
+                    if self.accelerator.is_main_process:
+                        self.logger.info("Loaded 'pytorch_model.bin' for resume")
+                except:
+                    accelerate.load_checkpoint_and_dispatch(
+                        self.accelerator.unwrap_model(self.model),
+                        os.path.join(checkpoint_path, "model.safetensors"),
+                    )
+                    if self.accelerator.is_main_process:
+                        self.logger.info("Loaded 'model.safetensors' for resume")
+                self.model.cuda(self.accelerator.device)
+            if self.accelerator.is_main_process:
+                self.logger.info("Load model weights for partially SUCCESS!")
         elif resume_type == "finetune":
             if isinstance(self.model, dict):
                 for idx, sub_model in enumerate(self.model.keys()):
@@ -334,10 +377,8 @@ class TTSTrainer(BaseTrainer):
                 self.model.cuda(self.accelerator.device)
             if self.accelerator.is_main_process:
                 self.logger.info("Load model weights for finetune SUCCESS!")
-
         else:
             raise ValueError("Unsupported resume type: {}".format(resume_type))
-
         return checkpoint_path
 
     ### THIS IS MAIN ENTRY ###
@@ -546,7 +587,6 @@ class TTSTrainer(BaseTrainer):
                 / len(self.train_dataloader)
                 * self.cfg.train.gradient_accumulation_step
             )
-
         return epoch_sum_loss, epoch_losses
 
     @torch.inference_mode()

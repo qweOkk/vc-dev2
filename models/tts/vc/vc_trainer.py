@@ -8,7 +8,6 @@ import shutil
 import json
 import json5
 import torch
-import pyworld as pw
 import numpy as np
 from tqdm import tqdm
 from utils.util import ValueWindow
@@ -17,147 +16,16 @@ from models.tts.base.tts_trainer import TTSTrainer
 from models.base.base_sampler import VariableSampler
 
 from diffusers import get_scheduler
-import torch.nn.functional as F
-import torch.nn as nn
 
 import accelerate
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
-from librosa.filters import mel as librosa_mel_fn
 
 from models.tts.vc.ns2_uniamphion import UniAmphionVC
 from models.tts.vc.vc_dataset import  VCCollator, VCDataset, batch_by_size
 from models.tts.vc.hubert_kmeans import HubertWithKmeans
-
-mel_basis = {}
-hann_window = {}
-init_mel_and_hann = False
-cosine_loss = nn.CosineEmbeddingLoss()
-
-def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
-    return torch.log(torch.clamp(x, min=clip_val) * C)
-
-def noise_clean_similarity_loss(ref_emb, noisy_ref_emb):
-    target = torch.tensor([1], dtype=torch.float).to(ref_emb.device)
-    ref_emb = ref_emb.reshape(ref_emb.size(0), -1) # (B, 32, 512) --> (B, 32 * 512)
-    noisy_ref_emb = noisy_ref_emb.reshape(noisy_ref_emb.size(0), -1) # (B, 32, 512) --> (B, 32 * 512)
-    loss = cosine_loss(ref_emb, noisy_ref_emb, target) + 1e-6
-    return loss
-
-def cross_entropy_loss(preds, targets, reduction='none'):
-    log_softmax = nn.LogSoftmax(dim=-1)
-    loss = (-targets * log_softmax(preds)).sum(1)
-    if reduction == "none":
-        return loss
-    elif reduction == "mean":
-        return loss.mean()
-    
-class ConstractiveSpeakerLoss(nn.Module):
-    def __init__(self, temperature=1.):
-        super(ConstractiveSpeakerLoss, self).__init__()
-        self.temperature = temperature
-
-    def forward(self, x, speaker_ids):
-        # x : B, H
-        # speaker_ids: B
-        speaker_ids = speaker_ids.reshape(-1)
-        speaker_ids_expand = torch.zeros(len(speaker_ids),len(speaker_ids)).to(speaker_ids.device)
-        speaker_ids_expand = (speaker_ids.view(-1,1) == speaker_ids).float() #形成一个mask
-        x_t = x.transpose(0,1) # B, C --> C,B
-        logits = (x @ x_t) / self.temperature # B, H * H, B --> B, B
-        targets = F.softmax(speaker_ids_expand / self.temperature, dim=-1)
-        loss = cross_entropy_loss(logits, targets, reduction='none')
-        return loss.mean()
-    
-
-def diff_loss(pred, target, mask, loss_type="l1"):
-    # pred: (B, T, d)
-    # target: (B, T, d)
-    # mask: (B, T)
-    if loss_type == "l1":
-        loss = F.l1_loss(pred, target, reduction="none").float() * (
-            mask.to(pred.dtype).unsqueeze(-1)
-        )
-    elif loss_type == "l2":
-        loss = F.mse_loss(pred, target, reduction="none").float() * (
-            mask.to(pred.dtype).unsqueeze(-1)
-        )
-    else:
-        raise NotImplementedError()
-    loss = (torch.mean(loss, dim=-1)).sum() / (mask.to(pred.dtype).sum())
-    return loss
-
-def spectral_normalize_torch(magnitudes):
-    output = dynamic_range_compression_torch(magnitudes)
-    return output
-
-def mel_spectrogram(
-    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
-):
-
-    global mel_basis, hann_window, init_mel_and_hann
-    if not init_mel_and_hann:
-        mel = librosa_mel_fn(
-            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
-        )
-        mel_basis[str(fmax) + "_" + str(y.device)] = (
-            torch.from_numpy(mel).float().to(y.device)
-        )
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
-        init_mel_and_hann = True
-
-    y = torch.nn.functional.pad(
-        y.unsqueeze(1),
-        (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
-        mode="reflect",
-    )
-    y = y.squeeze(1)
-
-    # complex tensor as default, then use view_as_real for future pytorch compatibility
-    spec = torch.stft(
-        y,
-        n_fft,
-        hop_length=hop_size,
-        win_length=win_size,
-        window=hann_window[str(y.device)],
-        center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
-        return_complex=True,
-    )
-    spec = torch.view_as_real(spec)
-
-    spec = torch.sqrt(spec.pow(2).sum(-1) + (1e-9))
-
-    spec = torch.matmul(mel_basis[str(fmax) + "_" + str(y.device)], spec)
-    spec = spectral_normalize_torch(spec)
-
-    return spec
-
-def interpolate(f0):
-    uv = f0 == 0
-    if len(f0[~uv]) > 0:
-        # interpolate the unvoiced f0
-        f0[uv] = np.interp(np.where(uv)[0], np.where(~uv)[0], f0[~uv])
-        uv = uv.astype("float")
-        uv = np.min(np.array([uv[:-2], uv[1:-1], uv[2:]]), axis=0)
-        uv = np.pad(uv, (1, 1))
-    return f0, uv
-
-def extract_world_f0(speech):
-    audio = speech.cpu().numpy()
-    f0s = []
-    for i in range(audio.shape[0]):
-        wav = audio[i]
-        frame_num = len(wav) // 200
-        f0, t = pw.dio(wav.astype(np.float64), 16000, frame_period=12.5)
-        f0 = pw.stonemask(wav.astype(np.float64), f0, t, 16000)
-        f0, _ = interpolate(f0)
-        f0 = torch.from_numpy(f0).to(speech.device)
-        f0s.append(f0[:frame_num])
-    f0s = torch.stack(f0s, dim=0).float()
-    return f0s
+from models.tts.vc.vc_loss import diff_loss, ConstractiveSpeakerLoss
+from models.tts.vc.vc_utils import mel_spectrogram, extract_world_f0
 
 
 class VCTrainer(TTSTrainer):
@@ -198,9 +66,7 @@ class VCTrainer(TTSTrainer):
         self.batch_count: int = 0
         self.step: int = 0
         self.epoch: int = 0
-        self.max_epoch = (
-            self.cfg.train.max_epoch if self.cfg.train.max_epoch > 0 else float("inf")
-        )
+        self.max_epoch = (self.cfg.train.max_epoch if self.cfg.train.max_epoch > 0 else float("inf"))
         if self.accelerator.is_main_process:
             self.logger.info(
                 "Max epoch: {}".format(
@@ -211,7 +77,6 @@ class VCTrainer(TTSTrainer):
         # Check values
         if self.accelerator.is_main_process:
             self._check_basic_configs()
-            # Set runtime configs
             self.save_checkpoint_stride = self.cfg.train.save_checkpoint_stride
             self.checkpoints_path = [
                 [] for _ in range(len(self.save_checkpoint_stride))
@@ -223,68 +88,56 @@ class VCTrainer(TTSTrainer):
 
         # set random seed
         with self.accelerator.main_process_first():
-            #start = time.time_ns()
             self._set_random_seed(self.cfg.train.random_seed)
-            #end = time.time_ns()
-            # if self.accelerator.is_main_process:
-            #     self.logger.debug(
-            #         f"Setting random seed done in {(end - start) / 1e6:.2f}ms"
-            #     )
-            #     self.logger.debug(f"Random seed: {self.cfg.train.random_seed}")
  
         # setup data_loader
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building dataset...")
-            # start = time.time_ns()
             self.train_dataloader, self.valid_dataloader = self._build_dataloader()
-            # end = time.time_ns()
-            # if self.accelerator.is_main_process:
-            #     self.logger.info(
-            #         f"Building dataset done in {(end - start) / 1e6:.2f}ms"
-            #     )
-
-        # setup model
+            self.speaker_num = len(self.train_dataloader.dataset.speaker2id)
             
+        # build model
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building model...")
-            #start = time.time_ns()
             self.model, self.w2v = self._build_model()
-            #end = time.time_ns()
-            # if self.accelerator.is_main_process:
-            #     self.logger.debug(self.model)
-            #     self.logger.info(f"Building model done in {(end - start) / 1e6:.2f}ms")
-            #     self.logger.info(
-            #         f"Model parameters: {self._count_parameters(self.model)/1e6:.2f}M"
-            #     )
+
+        with self.accelerator.main_process_first():
+            if self.accelerator.is_main_process:
+                self.logger.info("Resume training: {}".format(args.resume))
+            if args.resume:
+                if self.accelerator.is_main_process:
+                    self.logger.info("Resuming from checkpoint...")
+                ckpt_path = self._load_model(
+                    self.checkpoint_dir,
+                    args.checkpoint_path,
+                    resume_type=args.resume_type,
+                )
+                self.checkpoints_path = json.load(
+                    open(os.path.join(ckpt_path, "ckpts.json"), "r")
+                )
+
+            self.checkpoint_dir = os.path.join(self.exp_dir, "checkpoint")
+            if self.accelerator.is_main_process:
+                os.makedirs(self.checkpoint_dir, exist_ok=True)
+            if self.accelerator.is_main_process:
+                self.logger.debug(f"Checkpoint directory: {self.checkpoint_dir}")
+
 
         # optimizer & scheduler
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building optimizer and scheduler...")
-            # start = time.time_ns()
             self.optimizer = self._build_optimizer()
             self.scheduler = self._build_scheduler()
-            # end = time.time_ns()
-            # if self.accelerator.is_main_process:
-            #     self.logger.info(
-            #         f"Building optimizer and scheduler done in {(end - start) / 1e6:.2f}ms"
-            #     )
 
         # accelerate prepare
         if not self.cfg.train.use_dynamic_batchsize:
             with self.accelerator.main_process_first():
                 if self.accelerator.is_main_process:
                     self.logger.info("Initializing accelerate...")
-            # start = time.time_ns()
-            (
-                self.train_dataloader,
-                self.valid_dataloader,
-            ) = self.accelerator.prepare(
-                self.train_dataloader,
-                self.valid_dataloader,
-            )
+            (self.train_dataloader, self.valid_dataloader) = self.accelerator.prepare(self.train_dataloader,self.valid_dataloader)
 
         if isinstance(self.model, dict):
             for key in self.model.keys():
@@ -311,52 +164,18 @@ class VCTrainer(TTSTrainer):
         else:
             self.scheduler = self.accelerator.prepare(self.scheduler)
 
-        # end = time.time_ns()
-        # if self.accelerator.is_main_process:
-        #     self.logger.info(
-        #         f"Initializing accelerate done in {(end - start) / 1e6:.2f}ms"
-        #     )
-
-        # create criterion
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
                 self.logger.info("Building criterion...")
-            # start = time.time_ns()
             self.criterion = self._build_criterion()
-            # end = time.time_ns()
-            # if self.accelerator.is_main_process:
-            #     self.logger.info(
-            #         f"Building criterion done in {(end - start) / 1e6:.2f}ms"
-            #     )
 
-
-        with self.accelerator.main_process_first():
-            if self.accelerator.is_main_process:
-                # show if resume
-                self.logger.info("Resume training: {}".format(args.resume))
-            if args.resume:
-                if self.accelerator.is_main_process:
-                    self.logger.info("Resuming from checkpoint...")
-                ckpt_path = self._load_model(
-                    self.checkpoint_dir,
-                    args.checkpoint_path,
-                    resume_type=args.resume_type,
-                )
-                self.checkpoints_path = json.load(
-                    open(os.path.join(ckpt_path, "ckpts.json"), "r")
-                )
-
-            self.checkpoint_dir = os.path.join(self.exp_dir, "checkpoint")
-            if self.accelerator.is_main_process:
-                os.makedirs(self.checkpoint_dir, exist_ok=True)
-            if self.accelerator.is_main_process:
-                self.logger.debug(f"Checkpoint directory: {self.checkpoint_dir}")
-
-        # save config file path
         self.config_save_path = os.path.join(self.exp_dir, "args.json")
 
         self.task_type = "VC"
+        self.speaker_loss_weight = 0.25
+
         self.contrastive_speaker_loss = ConstractiveSpeakerLoss()
+
         if self.accelerator.is_main_process:
             self.logger.info("Task type: {}".format(self.task_type))
 
@@ -387,7 +206,7 @@ class VCTrainer(TTSTrainer):
 
 
     def _build_model(self):
-        model = UniAmphionVC(cfg=self.cfg.model, use_noise = self.use_noise)
+        model = UniAmphionVC(cfg=self.cfg.model, use_noise = self.use_noise, use_speaker = self.use_speaker, speaker_num = self.speaker_num)
         w2v = HubertWithKmeans(
             checkpoint_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3.pt",
             kmeans_path="/mnt/data3/hehaorui/ckpt/mhubert/mhubert_base_vp_en_es_fr_it3_L11_km1000.bin",
@@ -402,9 +221,6 @@ class VCTrainer(TTSTrainer):
             np.random.seed(980205)
             if self.accelerator.is_main_process:
                 self.logger.info("Use Dynamic Batchsize......")
-
-            # Dataset, Collator = self._build_dataset()
-
             train_dataset = VCDataset(self.cfg.trans_exp, TRAIN_MODE=True)
             train_collate = VCCollator(self.cfg)
             batch_sampler = batch_by_size(
@@ -585,25 +401,35 @@ class VCTrainer(TTSTrainer):
                 )
                 noisy_ref_mel = noisy_ref_mel.transpose(1, 2)
                 with torch.set_grad_enabled(True):
-                    diff_out, ref_emb, noisy_ref_emb = self.model(
+                    diff_out, ref_emb, noisy_ref_emb, am_speaker_loss = self.model(
                         x=mel,
                         content_feature=content_feature,
                         pitch=pitch,
                         x_ref=ref_mel,
                         x_mask=mask,
                         x_ref_mask=ref_mask,
+                        x_speaker = batch["speaker_id"],
                         noisy_x_ref=noisy_ref_mel
                     )
             else:
                 with torch.set_grad_enabled(True):
-                    diff_out, ref_emb, _ = self.model(
+                    diff_out, ref_emb, _, am_speaker_loss = self.model(
                             x=mel,
                             content_feature=content_feature,
                             pitch=pitch,
                             x_ref=ref_mel,
                             x_mask=mask,
                             x_ref_mask=ref_mask,
+                            x_speaker = batch["speaker_id"]
                         )
+                    
+                    
+         # ---------------Loss Computation---------------
+        if self.use_speaker and (am_speaker_loss is not None):
+            am_speaker_loss = am_speaker_loss * self.speaker_loss_weight
+            total_loss += am_speaker_loss
+            train_losses["am_speaker_loss"] = am_speaker_loss
+
         if self.use_noise:
             # ref_emb: (B, 32, 512)
             # noisy_ref_emb: (B, 32, 512)
@@ -621,20 +447,16 @@ class VCTrainer(TTSTrainer):
             assert all_speaker_ids.shape[0] == speaker_ids.shape[0] * 2
             #get contrastive_speaker_loss
             cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
-            cs_loss = cs_loss * 0.2 # scale the loss
+            cs_loss = cs_loss * self.speaker_loss_weight
             total_loss += cs_loss
             train_losses["contrastive_speaker_loss"] = cs_loss
-        
+
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
-        #print("diff_loss_x0: ", diff_loss_x0.item())
         total_loss += diff_loss_x0
-        #print("total_loss: ", total_loss.item())
         train_losses["diff_loss_x0"] = diff_loss_x0
 
         diff_loss_noise = diff_loss(diff_out["noise_pred"], diff_out["noise"], mask=mask)
-        #print("diff_loss_noise: ", diff_loss_noise.item())
         total_loss += diff_loss_noise 
-        #print("total_loss: ", total_loss.item())
         train_losses["diff_loss_noise"] = diff_loss_noise
         train_losses["total_loss"] = total_loss
 
@@ -651,7 +473,6 @@ class VCTrainer(TTSTrainer):
         learning_rate = self.optimizer.param_groups[0]['lr']
         formatted_lr = f"{learning_rate:.1e}"
         train_losses['learning_rate'] = formatted_lr
-
         train_losses["batch_size"] = pitch.shape[0]
         return (train_losses["total_loss"], train_losses, train_stats)
 
@@ -712,24 +533,26 @@ class VCTrainer(TTSTrainer):
                     fmax=8000,
                 )
                 noisy_ref_mel = noisy_ref_mel.transpose(1, 2)
-                diff_out, ref_emb, noisy_ref_emb = self.model(
+                diff_out, ref_emb, noisy_ref_emb, am_speaker_loss = self.model(
                     x=mel,
                     content_feature=content_feature,
                     pitch=pitch,
                     x_ref=ref_mel,
                     x_mask=mask,
                     x_ref_mask=ref_mask,
+                    x_speaker = batch["speaker_id"],
                     noisy_x_ref=noisy_ref_mel
                 )
             else:
-               diff_out, ref_emb, _ = self.model(
-                    x=mel,
-                    content_feature=content_feature,
-                    pitch=pitch,
-                    x_ref=ref_mel,
-                    x_mask=mask,
-                    x_ref_mask=ref_mask,
-                )
+                diff_out, ref_emb, _, am_speaker_loss = self.model(
+                        x=mel,
+                        content_feature=content_feature,
+                        pitch=pitch,
+                        x_ref=ref_mel,
+                        x_mask=mask,
+                        x_ref_mask=ref_mask,
+                        x_speaker = batch["speaker_id"]
+                    )
         if self.use_noise:
             # ref_emb: (B, 32, 512)
             # noisy_ref_emb: (B, 32, 512)
@@ -746,13 +569,13 @@ class VCTrainer(TTSTrainer):
             all_speaker_ids = torch.cat([speaker_ids, noisy_speaker_ids], dim=0)
             #get contrastive _speaker_loss
             cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
-            cs_loss = cs_loss * 0.2 # scale the loss
+            cs_loss = cs_loss * self.speaker_loss_weight
             total_loss += cs_loss
             valid_losses["contrastive_speaker_loss"] = cs_loss
-            
-            # diff_ref_similarity_loss = noise_clean_similarity_loss(ref_emb, noisy_ref_emb)
-            # total_loss += diff_ref_similarity_loss
-            # valid_losses["diff_ref_similarity_loss"] = diff_ref_similarity_loss
+        
+        if self.use_speaker:
+            #validation的时候不计算speaker loss
+            pass
 
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
         total_loss += diff_loss_x0
@@ -764,10 +587,7 @@ class VCTrainer(TTSTrainer):
         )
         total_loss += diff_loss_noise 
         valid_losses["diff_loss_noise"] = diff_loss_noise
-
-    
         valid_losses["total_loss"] = total_loss
-
         for item in valid_losses:
             valid_losses[item] = valid_losses[item].item()
 
@@ -786,7 +606,6 @@ class VCTrainer(TTSTrainer):
             self.model.eval()
 
         epoch_sum_loss = 0.0
-        # epoch_losses = dict()
 
         for batch in tqdm(
             self.valid_dataloader,
@@ -806,8 +625,6 @@ class VCTrainer(TTSTrainer):
 
             total_loss, _, _ = self._valid_step(batch)
             epoch_sum_loss += total_loss
-            # for key, value in valid_losses.items():
-            #     epoch_losses[key] = value
 
         self.accelerator.wait_for_everyone()
 
@@ -829,7 +646,6 @@ class VCTrainer(TTSTrainer):
             self.w2v.eval()
 
         epoch_sum_loss: float = 0.0 # total loss
-        # epoch_losses: dict = {} # loss dict
         epoch_step: int = 0 # step count
 
         for batch in tqdm(
@@ -860,7 +676,6 @@ class VCTrainer(TTSTrainer):
                 self.current_loss = total_loss
                 if isinstance(train_losses, dict):
                     for key, loss in train_losses.items():
-                        # epoch_losses[key] = loss
                         self.accelerator.log(
                             {"Epoch/Train {} Loss".format(key): loss},
                             step=self.step,
@@ -934,8 +749,6 @@ class VCTrainer(TTSTrainer):
 
     def save_checkpoint(self):
         self.accelerator.wait_for_everyone()
-
-        # Check if hit save_checkpoint_stride and run_eval
         run_eval = False
         if self.accelerator.is_main_process:
             save_checkpoint = False
@@ -948,18 +761,15 @@ class VCTrainer(TTSTrainer):
 
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process and save_checkpoint:
-            # 构造检查点文件的路径
             checkpoint_filename = "epoch-{:04d}_step-{:07d}_loss-{:.6f}".format(
                 self.epoch, self.step, self.current_loss
             )
             path = os.path.join(self.checkpoint_dir, checkpoint_filename)
 
-            # 保存模型和优化器的状态
             print("Saving state to {}...".format(path))
             self.accelerator.save_state(path)
             print("Finished saving state.")
 
-            # 更新检查点路径记录
             json.dump(
                 self.checkpoints_path,
                 open(os.path.join(path, "ckpts.json"), "w"),
@@ -967,14 +777,12 @@ class VCTrainer(TTSTrainer):
                 indent=4,
             )
 
-            # 移除旧的检查点
             to_remove = []
             for idx in hit_idx:
                 self.checkpoints_path[idx].append(path)
                 while len(self.checkpoints_path[idx]) > self.keep_last[idx]:
                     to_remove.append((idx, self.checkpoints_path[idx].pop(0)))
 
-            # 查找需要删除的检查点
             total = set()
             for i in self.checkpoints_path:
                 total |= set(i)
@@ -983,12 +791,10 @@ class VCTrainer(TTSTrainer):
                 if path not in total:
                     do_remove.add(path)
 
-            # 删除旧的检查点
             for path in do_remove:
                 shutil.rmtree(path, ignore_errors=True)
                 print(f"Removed old checkpoint: {path}")
 
-        # 再次确保所有进程同步
         self.accelerator.wait_for_everyone()
 
 
