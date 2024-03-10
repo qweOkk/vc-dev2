@@ -22,7 +22,8 @@ from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
 
 from models.tts.vc.ns2_uniamphion import UniAmphionVC
-from models.tts.vc.vc_dataset import  VCCollator, VCDataset, batch_by_size
+# from models.tts.vc.vc_dataset import  VCCollator, VCDataset, batch_by_size
+from models.tts.vc.vc_new_dataset import VCCollator, VCDataset, batch_by_size
 from models.tts.vc.hubert_kmeans import HubertWithKmeans
 from models.tts.vc.vc_loss import diff_loss, ConstractiveSpeakerLoss
 from models.tts.vc.vc_utils import mel_spectrogram, extract_world_f0

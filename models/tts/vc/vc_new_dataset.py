@@ -8,19 +8,25 @@ from utils.data_utils import *
 from models.base.base_dataset import (
     BaseCollator,
 )
+
 from multiprocessing import Pool, Lock
 import random
 import torchaudio
 import rir_generator as rir
+import pandas as pd
 
 
 NUM_WORKERS = 64
 lock = Lock()  # 创建一个全局锁
 SAMPLE_RATE = 16000
 
-def get_metadata(file_path):
-    metadata = torchaudio.info(file_path)
-    return file_path, metadata.num_frames
+# def get_duration(file_path):
+#     duration = librosa.get_duration(path=file_path, sr=SAMPLE_RATE)
+#     return file_path, duration
+
+def get_duration(file_path):
+    duration = torchaudio.info(file_path).num_frames / SAMPLE_RATE
+    return file_path, duration
 
 def get_speaker(file_path):
     speaker_id = file_path.split(os.sep)[-3]
@@ -43,160 +49,189 @@ def safe_write_to_file(data, file_path, mode='w'):
 class VCDataset(Dataset):
     def __init__(self, args, TRAIN_MODE=True):
         print(f"Initializing VCDataset")
+
         if TRAIN_MODE:
-            directory_list = args.directory_list
+            dataset_list = args.dataset_list
+            dataset_cache_dir = args.cache_dir
         else:
-            directory_list = args.test_directory_list
-        random.shuffle(directory_list)
+            dataset_list = args.test_dataset_list
+            dataset_cache_dir = args.cache_dir
+
+        random.shuffle(dataset_list)
+
+        os.makedirs(dataset_cache_dir, exist_ok=True)
+        # create dataset2dir
+
+        self.dataset2dir = {
+            'mls_english_opus': '/mnt/data2/hehaorui/mls_english_opus/train/audio',
+            'librilight_small': '/mnt/data4/hehaorui/small_15s',
+            'mls_test':'/mnt/data2/wangyuancheng/mls_english/test/audio',
+        }
 
         self.use_speaker = args.use_speaker
-        self.use_noise = args.use_noise  
-        print(f"Using speaker: {self.use_speaker}, using noise: {self.use_noise}")   
-        # number of workers
+        self.use_noise = args.use_noise
+        print(f"Using speaker: {self.use_speaker}, using noise: {self.use_noise}")
         print(f"Using {NUM_WORKERS} workers")
-        self.directory_list = directory_list
-        print(f"Loading {len(directory_list)} directories: {directory_list}")
-        # Load metadata cache
-        self.metadata_cache_path = '/mnt/data2/hehaorui/ckpt/rp_metadata_cache.json'
-        print(f"Loading metadata_cache from {self.metadata_cache_path}")
-        if os.path.exists(self.metadata_cache_path):
-            with open(self.metadata_cache_path, 'r', encoding='utf-8') as f:
-                self.metadata_cache = json.load(f)
-            print(f"Loaded {len(self.metadata_cache)} metadata_cache")
-        else:
-            print(f"metadata_cache not found, creating new")
-            self.metadata_cache = {}
-        # Load speaker cache
-        self.speaker_cache_path = '/mnt/data2/hehaorui/ckpt/rp_file2speaker.json'
-        print(f"Loading speaker_cache from {self.speaker_cache_path}")
-        if os.path.exists(self.speaker_cache_path):
-            with open(self.speaker_cache_path, 'r', encoding='utf-8') as f:
-                self.speaker_cache = json.load(f)
-            print(f"Loaded {len(self.speaker_cache)} speaker_cache")
-        else:
-            print(f"speaker_cache not found, creating new")
-            self.speaker_cache = {}
-        
-        self.files = []
-        # Load all flac files
-        for directory in directory_list:
-            print(f"Loading {directory}")
-            files = self.get_flac_files(directory)
-            random.shuffle(files)
-            print(f"Loaded {len(files)} files")
-            self.files.extend(files)
-            del files
-            print(f"Now {len(self.files)} files")
-            self.meta_data_cache = self.process_files()
-            self.speaker_cache = self.process_speakers()
-            temp_cache_path = self.metadata_cache_path.replace('.json', f'_{directory.split("/")[-1]}.json')
-            if not os.path.exists(temp_cache_path):
-                safe_write_to_file(self.meta_data_cache, temp_cache_path)
-                print(f"Saved metadata cache to {temp_cache_path}")
-            temp_cache_path = self.speaker_cache_path.replace('.json', f'_{directory.split("/")[-1]}.json')
-            if not os.path.exists(temp_cache_path):
-                safe_write_to_file(self.speaker_cache, temp_cache_path)
-                print(f"Saved speaker cache to {temp_cache_path}")
-        
-        print(f"Loaded {len(self.files)} files")
-        random.shuffle(self.files)  # Shuffle the files.
 
-        self.filtered_files, self.all_num_frames, index2numframes, index2speakerid = self.filter_files()
-        print(f"Loaded {len(self.filtered_files)} files")
+        self.dataset_list = dataset_list
+        self.meta_data_cache = []
+        self.meta_data_cache_path = os.path.join(dataset_cache_dir, "MAIN_metadata_cache.csv")
 
-        self.index2numframes = index2numframes#index to 每条utt的长度
-        self.index2speaker = index2speakerid #index to 每条utt的speaker
-        self.speaker2id = self.create_speaker2id() #每条utt的speaker to 每条utt的speaker_id
+        print(f"Loading {len(dataset_list)} datasets: {dataset_list}")
+        for dataset in dataset_list:
+            if dataset not in self.dataset2dir:
+                raise ValueError(f"Unknown dataset: {dataset}")
+
+            dataset_cache_path = os.path.join(dataset_cache_dir, f"{dataset}_metadata_cache.csv")
+
+            if os.path.exists(dataset_cache_path):
+                print(f"Loading metadata_cache from {dataset_cache_path}")
+                dataset_meta_data_cache = pd.read_csv(dataset_cache_path, encoding='utf-8')
+                print(f"Loaded {len(dataset_meta_data_cache)} metadata_cache")
+            else:
+                print(f"Creating metadata_cache for {dataset}")
+                dataset_meta_data_cache = self.create_metadata_cache(dataset, dataset_cache_dir)
+                print(f"Saved metadata cache to {dataset_cache_path}")
+
+            self.meta_data_cache.append(dataset_meta_data_cache)
+
+        self.meta_data_cache = pd.concat(self.meta_data_cache, ignore_index=True) #合并所有的metadata_cache
+        print(f"Loaded {len(self.meta_data_cache)} metadata_cache")
+        self.meta_data_cache = self.meta_data_cache.sample(frac=1.0).reset_index(drop=True) #打乱顺序
+        self.meta_data_cache.to_csv(self.meta_data_cache_path, index=False, encoding='utf-8') #保存到文件
+        print(f"Saved metadata cache to {self.meta_data_cache_path}")
+
+        # create speaker2speaker_id
+        self.speaker2id = self.create_speaker2id()
+        self.all_num_frames = self.meta_data_cache['duration'].apply(lambda x: int(x * SAMPLE_RATE)).to_list()
         self.num_frame_sorted = np.array(sorted(self.all_num_frames))
-        self.num_frame_indices = np.array(
-            sorted(
-                range(len(self.all_num_frames)), key=lambda k: self.all_num_frames[k]
-            )
-        )
-        del self.meta_data_cache, self.speaker_cache
-
+        self.num_frame_indices = np.array(sorted(range(len(self.all_num_frames)), key=lambda k: self.all_num_frames[k]))
         if self.use_noise:
             if TRAIN_MODE:
-                self.noise_filenames = self.get_all_flac(args.noise_dir)
+                self.noise_filenames = self.get_all_audios(args.noise_dir) #rel_paths
+                # rel_paths to all paths
+                self.noise_filenames = [os.path.join(args.noise_dir, rel_path) for rel_path in self.noise_filenames]
             else:
-                self.noise_filenames = self.get_all_flac(args.test_noise_dir)
-            self.SNR = np.linspace(int(args.snr_lower), int(args.snr_upper), int(args.total_snrlevels))
+                self.noise_filenames = self.get_all_audios(args.test_noise_dir)
+                self.noise_filenames = [os.path.join(args.test_noise_dir, rel_path) for rel_path in self.noise_filenames]
 
-    def process_files(self):
+    def create_metadata_cache(self, dataset, cache_dir):
+        dataset_relpath2duration_path = os.path.join(cache_dir, f"{dataset}_relpath2duration.json")
+        dataset_relpath2speaker_path = os.path.join(cache_dir, f"{dataset}_relpath2speaker.json")
+        dataset_index2relpath_path = os.path.join(cache_dir, f"{dataset}_index2relpath.json")
+        dataset_meta_data_cache_path = os.path.join(cache_dir, f"{dataset}_metadata_cache.csv")
+
+        if os.path.exists(dataset_relpath2duration_path) and os.path.exists(
+                dataset_relpath2speaker_path) and os.path.exists(dataset_index2relpath_path):
+            print(f"Loading cache for {dataset}")
+            with open(dataset_relpath2duration_path, 'r', encoding='utf-8') as f:
+                relpath2duration = json.load(f)
+            with open(dataset_relpath2speaker_path, 'r', encoding='utf-8') as f:
+                relpath2speaker = json.load(f)
+            with open(dataset_index2relpath_path, 'r', encoding='utf-8') as f:
+                index2relpath = json.load(f)
+            print(f"Loaded cache for {dataset} with {len(relpath2duration)} files")
+        else:
+            print(f"Creating cache for {dataset}")
+            relpath2duration = {}
+            relpath2speaker = {}
+            index2relpath = {}
+
+            audio_rel_paths = self.get_audio_files(self.dataset2dir[dataset])
+            random.shuffle(audio_rel_paths)
+            print(f"Loaded {len(audio_rel_paths)} files from {dataset}")
+
+            print(f"Generating cache for {dataset}")
+            relpath2duration, relpath2speaker, index2relpath = self.get_duration_speaker_and_filter(
+                dataset, audio_rel_paths)
+            print(f"Generated cache for {dataset} with {len(relpath2duration)} files")
+            print(f"Saving cache for {dataset}")
+            self.save_cache_files(dataset_relpath2duration_path, dataset_relpath2speaker_path,
+                                  dataset_index2relpath_path, relpath2duration, relpath2speaker, index2relpath)
+            print(f"Saved cache for {dataset}")
+
+        meta_datas = []
+        print(f"Generating metadata cache for {dataset}")
+        for idx, relpath in tqdm(index2relpath.items()):
+            temp_item = {
+                'uid': f"{dataset}#{str(idx)}",
+                'relpath': relpath,
+                'duration': relpath2duration[relpath],
+                'speaker': relpath2speaker[relpath]
+            }
+            meta_datas.append(temp_item)
+        dataset_meta_data_cache = pd.DataFrame(meta_datas)
+        dataset_meta_data_cache.to_csv(dataset_meta_data_cache_path, index=False, encoding='utf-8')
+        return dataset_meta_data_cache
+
+    def save_cache_files(self, relpath2duration_path, relpath2speaker_path, index2relpath_path,
+                         relpath2duration, relpath2speaker, index2relpath):
+        safe_write_to_file(relpath2duration, relpath2duration_path)
+        print(f"Saved relpath2duration to {relpath2duration_path}")
+        safe_write_to_file(relpath2speaker, relpath2speaker_path)
+        print(f"Saved relpath2speaker to {relpath2speaker_path}")
+        safe_write_to_file(index2relpath, index2relpath_path)
+        print(f"Saved index2relpath to {index2relpath_path}")
+
+    def get_duration_speaker_and_filter(self, dataset, audio_rel_paths):
         print(f"Processing metadata...")
-        files_to_process = [file for file in self.files if file not in self.metadata_cache]
-        if files_to_process:
-            with Pool(processes=NUM_WORKERS) as pool:
-                results = list(tqdm(pool.imap_unordered(get_metadata, files_to_process), total=len(files_to_process)))
-            for file, num_frames in results:
-                self.metadata_cache[file] = num_frames 
-            safe_write_to_file(self.metadata_cache, self.metadata_cache_path)
-        else:
-            print(f"Skipping processing metadata, loaded {len(self.metadata_cache)} files")
-        return self.metadata_cache
+        rel_path2duration = {}
+        rel_path2speaker = {}
+        idx2rel_path = {}
+        # relative_path to full_path
+        base_dir = self.dataset2dir[dataset]
+        full_paths = [os.path.join(base_dir, rel_path) for rel_path in audio_rel_paths]
+        # # sample 1000 files to get duration
+        # print(f"Sampling 1000 files to get duration")
+        # full_paths = random.sample(full_paths, 1000)
+        with Pool(processes=NUM_WORKERS) as pool:
+            results = list(tqdm(pool.imap_unordered(get_duration, full_paths), total=len(audio_rel_paths)))
+        
+        idx = 0
+        print(f"Filtering files with duration between 3.0 and 25.0 seconds")
+        for file, duration in tqdm(results):
+            if duration > 3.0 and duration < 25.0:
+                rel_path = os.path.relpath(file, base_dir)
+                rel_path2duration[rel_path] = duration
+                speaker_id = file.split(os.sep)[-3]
+                #dataset+speaker_id
+                speaker = f"{dataset}_{speaker_id}"
+                rel_path2speaker[rel_path] = speaker
+                idx2rel_path[idx] = rel_path
+                idx += 1
+        return rel_path2duration, rel_path2speaker, idx2rel_path
 
-    def process_speakers(self):
-        print(f"Processing speakers...")
-        files_to_process = [file for file in self.files if file not in self.speaker_cache]
-        if files_to_process:
-            with Pool(processes=NUM_WORKERS) as pool:
-                results = list(tqdm(pool.imap_unordered(get_speaker, files_to_process), total=len(files_to_process)))
-            for file, speaker in results:
-                self.speaker_cache[file] = speaker
-            safe_write_to_file(self.speaker_cache, self.speaker_cache_path)
-        else:
-            print(f"Skipping processing speakers, loaded {len(self.speaker_cache)} files")
-        return self.speaker_cache
-
-    def get_flac_files(self, directory):
-        flac_files = []
-        for root, dirs, files in os.walk(directory):
+    def get_audio_files(self, directory):
+        audio_files = []
+        for root, _, files in os.walk(directory):
             for file in files:
-                # flac or wav
-                if file.endswith(".flac") or file.endswith(".wav"):
-                    flac_files.append(os.path.join(root, file))
-        return flac_files
+                if file.endswith(('.flac', '.wav', '.opus')):
+                    rel_path = os.path.relpath(os.path.join(root, file), directory)
+                    audio_files.append(rel_path)
+        return audio_files
 
-    def get_all_flac(self, directory):
+    def get_all_audios(self, directory):
         directories = [os.path.join(directory, d) for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
         if not directories:
-            return self.get_flac_files(directory)
+            return self.get_audio_files(directory)
         with Pool(processes=NUM_WORKERS) as pool:
             results = []
-            for result in tqdm(pool.imap_unordered(self.get_flac_files, directories), total=len(directories), desc="Processing"):
+            for result in tqdm(pool.imap_unordered(self.get_audio_files, directories), total=len(directories), desc="Processing"):
                 results.extend(result)
         print(f"Found {len(results)} waveform files")
         return results
     
     def get_num_frames(self, index):
-        return self.index2numframes[index]
-    
-    def filter_files(self):
-        # Filter files
-        metadata_cache = self.meta_data_cache
-        speaker_cache = self.speaker_cache
-        filtered_files = []
-        all_num_frames = []
-        index2numframes = {}
-        index2speaker = {}
-        for file in self.files:
-            num_frames = metadata_cache[file]
-            if SAMPLE_RATE * 3 <= num_frames <= SAMPLE_RATE * 25:
-                filtered_files.append(file)
-                all_num_frames.append(num_frames)
-                index2speaker[len(filtered_files) - 1] = speaker_cache[file]
-                index2numframes[len(filtered_files) - 1] = num_frames
-        return filtered_files, all_num_frames, index2numframes, index2speaker
+        # get_num_frames(durations) by index
+        duration = self.meta_data_cache['duration'][index]
+        num_frames = int(duration * SAMPLE_RATE)
+        return num_frames
     
     def create_speaker2id(self):
+        all_speakers = self.meta_data_cache['speaker'].unique()
         speaker2id = {}
-        unique_id = 0  # 开始的唯一 ID
-        print(f"Creating speaker2id from {len(self.index2speaker)} utterences")
-        for _, speaker in tqdm(self.index2speaker.items()):
-            if speaker not in speaker2id:
-                speaker2id[speaker] = unique_id
-                unique_id += 1  # 为下一个唯一 speaker 增加 ID
-        print(f"Created speaker2id with {len(speaker2id)} speakers")
+        for idx, speaker in enumerate(all_speakers):
+            speaker2id[speaker] = idx
         return speaker2id
     
     def snr_mixer(self, clean, noise, snr):
@@ -222,14 +257,15 @@ class VCDataset(Dataset):
     def add_noise(self, clean):
         # self.noise_filenames: list of noise files
         random_idx = np.random.randint(0, np.size(self.noise_filenames))
-        noise, _ = librosa.load(self.noise_filenames[random_idx], sr=SAMPLE_RATE)
+        selected_noise_file = self.noise_filenames[random_idx]
+        noise, _ = librosa.load(selected_noise_file, sr=SAMPLE_RATE)
         clean = clean.cpu().numpy()
         if len(noise)>=len(clean):
             noise = noise[0:len(clean)] #截取噪声的长度
         else:
             while len(noise)<=len(clean): #如果噪声的长度小于语音的长度
                 random_idx = (random_idx + 1)%len(self.noise_filenames) #随机读一个噪声
-                newnoise, fs = librosa.load(self.noise_filenames[random_idx], sr=SAMPLE_RATE)
+                newnoise, fs = librosa.load(selected_noise_file, sr=SAMPLE_RATE)
                 noiseconcat = np.append(noise, np.zeros(int(fs * 0.2)))#在噪声后面加上0.2静音
                 noise = np.append(noiseconcat, newnoise)#拼接噪声
         noise = noise[0:len(clean)] #截取噪声的长度
@@ -264,16 +300,22 @@ class VCDataset(Dataset):
         except:
             return speech #如果遇到ValueError: s is outside the room，直接返回没加混响的声音
 
-    
     def __len__(self):
-        return len(self.files)
+        return len(self.meta_data_cache)
 
     def __getitem__(self, idx):
-        file_path = self.filtered_files[idx]
+        # Get the file rel path
+        file_rel_path = self.meta_data_cache['relpath'][idx]
+        # Get the dataset from cache uid
+        dataset = self.meta_data_cache['uid'][idx].split('#')[0]
+        # Get the full file path
+        file_path = os.path.join(self.dataset2dir[dataset], file_rel_path)
+        # Load the speech
         speech, _ = librosa.load(file_path, sr=SAMPLE_RATE)
         speech = torch.tensor(speech, dtype=torch.float32)
         inputs = self._get_reference_vc(speech, hop_length=200)
-        speaker = self.index2speaker[idx]
+        # Get the speaker id
+        speaker = self.meta_data_cache['speaker'][idx]
         speaker_id = self.speaker2id[speaker]
         inputs["speaker_id"] = speaker_id
         return inputs
@@ -406,3 +448,4 @@ def batch_by_size(
     if len(batch) > 0:
         batches.append(batch)
     return batches
+

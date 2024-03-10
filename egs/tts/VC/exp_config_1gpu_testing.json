@@ -37,17 +37,11 @@
         "num_train_steps": 800000
     }, 
   "trans_exp": {
-    "directory_list":[
-      "/mnt/data2/wangyuancheng/mls_english/dev/audio"
-      ],
-    "test_directory_list": [
-      "/mnt/data2/wangyuancheng/mls_english/test/audio"
-    ],
+    "dataset_list":[ "mls_english_opus"],
+    "test_dataset_list": ["mls_test"],
+    "cache_dir": "/mnt/data2/hehaorui/exp_cache/vc",
     "use_speaker": true,
     "use_noise": true,
-    "snr_lower": 2,
-    "snr_upper": 42,
-    "total_snrlevels": 5, 
     "noise_dir": "/home/hehaorui/code/Amphion/MS-SNSD/noise_train",
     "test_noise_dir": "/home/hehaorui/code/Amphion/MS-SNSD/noise_test" 
   }

@@ -25,13 +25,13 @@ echo "Exprimental Configuration File: $exp_config"
 exp_name="test_speaker_se"
 
 if [ -z "$gpu" ]; then
-    gpu="4,7"
+    gpu="4"
 fi
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
-CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 1125 \
+CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 12093 \
 "${work_dir}"/bins/tts/train.py \
     --config $exp_config \
     --exp_name $exp_name \
