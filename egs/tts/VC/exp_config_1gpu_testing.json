@@ -37,7 +37,7 @@
         "num_train_steps": 800000
     }, 
   "trans_exp": {
-    "dataset_list":[ "mls_english_opus"],
+    "dataset_list":["mls_english_opus", "librilight_small", "librilight_medium", "librilight_large"],
     "test_dataset_list": ["mls_test"],
     "cache_dir": "/mnt/data2/hehaorui/exp_cache/vc",
     "use_speaker": true,

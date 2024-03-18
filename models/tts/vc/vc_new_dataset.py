@@ -20,13 +20,13 @@ NUM_WORKERS = 64
 lock = Lock()  # 创建一个全局锁
 SAMPLE_RATE = 16000
 
-# def get_duration(file_path):
-#     duration = librosa.get_duration(path=file_path, sr=SAMPLE_RATE)
-#     return file_path, duration
-
 def get_duration(file_path):
-    duration = torchaudio.info(file_path).num_frames / SAMPLE_RATE
+    duration = librosa.get_duration(path=file_path, sr=SAMPLE_RATE)
     return file_path, duration
+
+# def get_duration(file_path):
+#     duration = torchaudio.info(file_path).num_frames / SAMPLE_RATE
+#     return file_path, duration
 
 def get_speaker(file_path):
     speaker_id = file_path.split(os.sep)[-3]
@@ -65,6 +65,8 @@ class VCDataset(Dataset):
         self.dataset2dir = {
             'mls_english_opus': '/mnt/data2/hehaorui/mls_english_opus/train/audio',
             'librilight_small': '/mnt/data4/hehaorui/small_15s',
+            'librilight_medium': '/mnt/data4/hehaorui/medium_15s',
+            'librilight_large': '/mnt/data4/hehaorui/large_15s',
             'mls_test':'/mnt/data2/wangyuancheng/mls_english/test/audio',
         }
 
@@ -92,10 +94,10 @@ class VCDataset(Dataset):
                 print(f"Creating metadata_cache for {dataset}")
                 dataset_meta_data_cache = self.create_metadata_cache(dataset, dataset_cache_dir)
                 print(f"Saved metadata cache to {dataset_cache_path}")
-
             self.meta_data_cache.append(dataset_meta_data_cache)
-
+        
         self.meta_data_cache = pd.concat(self.meta_data_cache, ignore_index=True) #合并所有的metadata_cache
+        
         print(f"Loaded {len(self.meta_data_cache)} metadata_cache")
         self.meta_data_cache = self.meta_data_cache.sample(frac=1.0).reset_index(drop=True) #打乱顺序
         self.meta_data_cache.to_csv(self.meta_data_cache_path, index=False, encoding='utf-8') #保存到文件

@@ -120,7 +120,6 @@ class VCDataset(Dataset):
                 self.noise_filenames = self.get_all_flac(args.noise_dir)
             else:
                 self.noise_filenames = self.get_all_flac(args.test_noise_dir)
-            self.SNR = np.linspace(int(args.snr_lower), int(args.snr_upper), int(args.total_snrlevels))
 
     def process_files(self):
         print(f"Processing metadata...")

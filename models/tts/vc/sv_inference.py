@@ -12,6 +12,7 @@ from models.tts.vc.ns2_uniamphion import UniAmphionVC
 from models.tts.vc.sv_scirpts.sv_utils import metric, get_sv_data, get_batch_cos_sim
 from ASGSR.attack.attackMain import get_baseline_model
 import librosa
+from denoiser import pretrained
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -99,10 +100,12 @@ def main():
     model.cuda(args.local_rank)
     model.eval()
 
-    model_se = UniAmphionVC(cfg.model)
+    model_se = UniAmphionVC(cfg=cfg.model, use_speaker = True, speaker_num = 12954)
     ckpt_path = args.checkpoint_path_2 # contrastive learning model
     print("ckpt_path", ckpt_path)
+    print("loading model")
     load_model(model_se, ckpt_path)
+    print("model loaded")
     model_se.cuda(args.local_rank)
     model_se.eval()
 
@@ -110,7 +113,6 @@ def main():
     baseline_model = get_baseline_model("ECAPATDNN")
     baseline_model.cuda(args.local_rank)
     baseline_model.eval()
-
 
     data = get_sv_data(text_path) #从txt文件中读出df
     data = data.sample(frac=split_rate, random_state=1126).reset_index(drop=True) #shuffle df
@@ -120,6 +122,11 @@ def main():
     socres_bsl_all = []
     scores_sv_all = []
     scores_all = []
+
+    # denoiser
+    denoiser_model = pretrained.dns64().cuda(args.local_rank)
+
+
     print("--- start testing ---")
     for idx in tqdm(range(len(data))):
         first_wav = data['First'].iloc[idx]
@@ -128,10 +135,32 @@ def main():
             first_wav = os.path.join(folder_path, first_wav)
         if not os.path.isabs(second_wav):
             second_wav = os.path.join(folder_path, second_wav)
-
+        
         label = torch.tensor(int(data['Label'].iloc[idx]))
         with torch.no_grad():
             first_wav, _ = librosa.load(first_wav, sr=16000)
+            second_wav, _ = librosa.load(second_wav, sr=16000)
+
+            # 取前5s
+            first_wav = first_wav[:16000*5]
+            second_wav = second_wav[:16000*5]
+
+
+            # first_wav = torch.from_numpy(first_wav).to(args.local_rank).unsqueeze(0)
+            # second_wav = torch.from_numpy(second_wav).to(args.local_rank).unsqueeze(0)
+            # first_wav = convert_audio(first_wav, 16000, denoiser_model.sample_rate, denoiser_model.chin)
+            # second_wav = convert_audio(second_wav, 16000, denoiser_model.sample_rate, denoiser_model.chin)
+
+            # with torch.no_grad():
+            #     first_wav = denoiser_model(first_wav[None])[0]
+            #     second_wav = denoiser_model(second_wav[None])[0]
+            # #resample to 16000
+            # first_wav = torchaudio.transforms.Resample(denoiser_model.sample_rate, 16000)(first_wav)
+            # second_wav = torchaudio.transforms.Resample(denoiser_model.sample_rate, 16000)(second_wav)
+            # first_wav = first_wav.cpu().numpy().squeeze()
+            # #print(first_wav.shape)
+            # second_wav = second_wav.cpu().numpy().squeeze()
+
             first_wav = np.pad(first_wav, (0, 1600 - len(first_wav) % 1600))
             first_audio = torch.from_numpy(first_wav).to(args.local_rank)
             first_audio = first_audio[None, :]
@@ -147,7 +176,6 @@ def main():
             first_mel = first_mel.transpose(1, 2).to(device=args.local_rank)
             first_mask = torch.ones(first_mel.shape[0], first_mel.shape[1]).to(args.local_rank)
 
-            second_wav, _ = librosa.load(second_wav, sr=16000)
             second_wav = np.pad(second_wav, (0, 1600 - len(second_wav) % 1600))
             second_audio = torch.from_numpy(second_wav).to(args.local_rank)
             second_audio = second_audio[None, :]
@@ -164,15 +192,15 @@ def main():
             second_mask = torch.ones(second_mel.shape[0], second_mel.shape[1]).to(args.local_rank)
 
             first_emb = model.sv_inference(first_mel, first_mask)
-            first_emb = torch.mean(first_emb, dim=1) # (B, 512) emb for the fist wav
+            #first_emb = torch.mean(first_emb, dim=1) # (B, 512) emb for the fist wav
             second_emb = model.sv_inference(second_mel, second_mask)
-            second_emb = torch.mean(second_emb, dim=1) # (B, 512) emb for the second wav
+            #second_emb = torch.mean(second_emb, dim=1) # (B, 512) emb for the second wav
             score = get_batch_cos_sim(first_emb,second_emb).to(torch.device('cpu'))
 
             first_emb_sv = model_se.sv_inference(first_mel, first_mask)
-            first_emb_sv = torch.mean(first_emb_sv, dim=1) # (B, 512) emb for the fist wav
+            #first_emb_sv = torch.mean(first_emb_sv, dim=1) # (B, 512) emb for the fist wav
             second_emb_sv = model_se.sv_inference(second_mel, second_mask)
-            second_emb_sv = torch.mean(second_emb_sv, dim=1) # (B, 512) emb for the second wav
+            #second_emb_sv = torch.mean(second_emb_sv, dim=1) # (B, 512) emb for the second wav
             score_sv = get_batch_cos_sim(first_emb_sv,second_emb_sv).to(torch.device('cpu'))
 
             first_emb_bsl = baseline_model(first_audio.to(device=args.local_rank))
@@ -199,7 +227,7 @@ def main():
     print("---- Our Baseline ----")
     metric(scores_all,labels_all)
 
-    print("---- Our Baseline + Contrastive ----")
+    print("---- Our Baseline + Loss ----")
     metric(scores_sv_all,labels_all)
         
         

@@ -23,7 +23,7 @@ from accelerate.utils import ProjectConfiguration
 
 from models.tts.vc.ns2_uniamphion import UniAmphionVC
 # from models.tts.vc.vc_dataset import  VCCollator, VCDataset, batch_by_size
-from models.tts.vc.vc_new_dataset import VCCollator, VCDataset, batch_by_size
+from models.tts.vc.vc_new_dataset import VCCollator, VCDataset, batch_by_size # used on ailab sever
 from models.tts.vc.hubert_kmeans import HubertWithKmeans
 from models.tts.vc.vc_loss import diff_loss, ConstractiveSpeakerLoss
 from models.tts.vc.vc_utils import mel_spectrogram, extract_world_f0
@@ -97,6 +97,7 @@ class VCTrainer(TTSTrainer):
                 self.logger.info("Building dataset...")
             self.train_dataloader, self.valid_dataloader = self._build_dataloader()
             self.speaker_num = len(self.train_dataloader.dataset.speaker2id)
+            print("speaker_num", self.speaker_num)
             
         # build model
         with self.accelerator.main_process_first():

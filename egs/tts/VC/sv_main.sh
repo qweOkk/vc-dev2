@@ -17,8 +17,8 @@ if [ -z "$exp_config" ]; then
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="sv_VCTK_voxceleb_voxcelebclean"
-cuda_id=7
+exp_name="trainSV"
+cuda_id=6
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
@@ -29,28 +29,8 @@ echo "Exprimental Name: $exp_name"
 #/mnt/data2/hehaorui/ckpt/vc/train_speaker/checkpoint/epoch-0002_step-0509000_loss-2.241144//model.safetensors #有speaker CE loss
 #/mnt/data2/hehaorui/ckpt/vc/sv_se_vc/checkpoint/epoch-0002_step-0749000_loss-0.136304/model.safetensors #有contrastive loss
 
-checkpoint_path_1="/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0001_step-0400000_loss-0.037989/model.safetensors"
-checkpoint_path_2="/mnt/data2/hehaorui/ckpt/vc/train_speaker/checkpoint/epoch-0002_step-0669000_loss-1.862286//model.safetensors"
-python "${work_dir}"/models/tts/vc/sv_inference.py \
+checkpoint_path="/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0001_step-0400000_loss-0.037989/model.safetensors"
+python "${work_dir}"/models/sv/sv_trainer.py \
     --config $exp_config \
-    --exp_name $exp_name \
-    --checkpoint_path_1 $checkpoint_path_1  \
-    --checkpoint_path_2 $checkpoint_path_2 \
-    --cuda_id ${cuda_id} \
-    --test_set "voxceleb" 
-
-# python "${work_dir}"/models/tts/vc/sv_inference.py \
-#     --config $exp_config \
-#     --exp_name $exp_name \
-#     --checkpoint_path_1 $checkpoint_path_1  \
-#     --checkpoint_path_2 $checkpoint_path_2 \
-#     --cuda_id ${cuda_id} \
-#     --test_set "voxceleb_clean" 
-
-python "${work_dir}"/models/tts/vc/sv_inference.py \
-    --config $exp_config \
-    --exp_name $exp_name \
-    --checkpoint_path_1 $checkpoint_path_1  \
-    --checkpoint_path_2 $checkpoint_path_2 \
-    --cuda_id ${cuda_id} \
-    --test_set "VCTK" 
+    --checkpoint_path $checkpoint_path \
+    --cuda_id ${cuda_id} 

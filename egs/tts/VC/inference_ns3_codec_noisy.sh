@@ -11,28 +11,21 @@ work_dir=$(dirname $(dirname $(dirname $exp_dir)))
 export WORK_DIR=$work_dir
 export PYTHONPATH=$work_dir
 export PYTHONIOENCODING=UTF-8
- 
-cd $work_dir/modules/monotonic_align
-mkdir -p monotonic_align
-python setup.py build_ext --inplace
-cd $work_dir
 
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config_1gpu_testing.json
+    exp_config="${exp_dir}"/exp_config_6gpu.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="test_speaker_se"
-
-if [ -z "$gpu" ]; then
-    gpu="4"
-fi
+exp_name="ns3_codec_vc_inference"
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
-CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 10293 \
-"${work_dir}"/bins/tts/train.py \
-    --config $exp_config \
-    --exp_name $exp_name \
-    --log_level debug 
+python "${work_dir}"/models/tts/vc/facodec_vc_inference_noisy.py\
+    --output_dir "/mnt/data2/hehaorui/vc_test/Results/NS3_codec_noisy" \
+    --cuda_id 7 
+
+#/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0000_step-0100000_loss-0.078911/
+#/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0001_step-0400000_loss-0.037989/
+#/mnt/data2/hehaorui/ckpt/vc/sv_se_vc/checkpoint/epoch-0001_step-0344000_loss-0.152027

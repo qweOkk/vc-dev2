@@ -2066,7 +2066,10 @@ class UniAmphionVC(nn.Module):
         reference_embedding, _ = self.reference_encoder(
             x_ref=x_ref, key_padding_mask=x_ref_mask
         )
-        return reference_embedding
+        reference_embedding = torch.mean(reference_embedding, dim=1)
+        x_norm = torch.norm(reference_embedding, p=2, dim=1, keepdim=True).clamp(min=1e-12)
+        x_norm = torch.div(reference_embedding, x_norm)
+        return x_norm
 
     def reset_parameters(self):
         def _reset_parameters(m):

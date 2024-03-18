@@ -11,7 +11,7 @@ class AMSoftmaxLoss(nn.Module):
         self.s = scale
         self.in_feats = nOut # input feature size
         self.nClasses = nClasses # number of classes (speaker numbers)
-        self.W = torch.nn.Parameter(torch.randn(self.in_feats, self.nClasses), requires_grad=True)
+        self.W = nn.Parameter(torch.randn(nOut, nClasses), requires_grad=True)
         nn.init.xavier_normal_(self.W, gain=1)
         self.ce = nn.CrossEntropyLoss(reduction='mean')
         print('Initialised AMSoftmax m=%.3f s=%.3f'%(self.m,self.s))
@@ -31,8 +31,8 @@ class AMSoftmaxLoss(nn.Module):
         if label_view.is_cuda: 
             label_view = label_view.cpu()
         delt_costh = torch.zeros(costh.size()).scatter_(1, label_view, self.m)
-        if x.is_cuda: 
-            delt_costh = delt_costh.cuda()
+        if x.is_cuda:
+            delt_costh = delt_costh.to(x.device)
         costh_m = costh - delt_costh
         costh_m_s = self.s * costh_m
         loss = self.ce(costh_m_s, label)

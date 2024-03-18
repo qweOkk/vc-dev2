@@ -50,9 +50,8 @@ def calculate_speaker_similarity(ref_dir, deg_dir):
         # --> target_p251_004_generated_e2e.wav
         ref_wav_file_name = "target_" + deg_wav_file_name
         ref_wav = os.path.join(ref_dir, ref_wav_file_name)  #
-        # print(deg_wav)
-        # print(ref_wav)
         if os.path.exists(ref_wav) == False:
+            print(f"Reference file {ref_wav} not found, skipping")
             continue
         ref, _ = librosa.load(ref_wav, sr=16000)
         deg, _ = librosa.load(deg_wav, sr=16000)
