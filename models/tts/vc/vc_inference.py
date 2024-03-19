@@ -93,7 +93,7 @@ def main():
     print("zero_shot_json_file_path", zero_shot_json_file_path)
     with torch.cuda.device(args.local_rank):
         torch.cuda.empty_cache()
-    model = UniAmphionVC(cfg.model)
+    model = UniAmphionVC(cfg=cfg.model, use_speaker = True, speaker_num = 12954)
     print("loading model")
     load_model(model, ckpt_path)
     print("model loaded")
@@ -135,8 +135,6 @@ def main():
     temp_id = 0
     for utt_id, utt in tqdm(utt_dict.items()):
         temp_id += 1
-        if temp_id < 18:
-            continue
 
         # source is the input
         wav_path = utt["source_speech"]

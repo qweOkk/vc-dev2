@@ -17,21 +17,17 @@ if [ -z "$exp_config" ]; then
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="vc_inference"
+exp_name="se_inference"
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
-python "${work_dir}"/models/tts/vc/vc_inference.py \
+python "${work_dir}"/models/tts/vc/se_inference.py \
     --config $exp_config \
-    --exp_name $exp_name \
-    --log_level debug \
-    --checkpoint_path "/mnt/data2/hehaorui/ckpt/vc/train_speaker/checkpoint/epoch-0002_step-0669000_loss-1.862286/model.safetensors" \
-    --output_dir "/mnt/data2/hehaorui/vc_test/Results/VCTK_clean_bsl" \
+    --checkpoint_path "/mnt/data2/hehaorui/ckpt/vc/sv_se_vc/checkpoint/epoch-0002_step-0749000_loss-0.136304/model.safetensors" \
+    --output_dir "/mnt/data2/hehaorui/se_test/Results" \
     --cuda_id 7 \
 
 #/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0000_step-0100000_loss-0.078911/
 #/mnt/data2/hehaorui/ckpt/zero-shot/epoch-0001_step-0400000_loss-0.037989/
 #/mnt/data2/hehaorui/ckpt/vc/sv_se_vc/checkpoint/epoch-0001_step-0344000_loss-0.152027
-#/mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0002_step-0587000_loss-0.565451
-#/mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0002_step-0679000_loss-0.582957

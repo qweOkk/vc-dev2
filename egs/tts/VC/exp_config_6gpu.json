@@ -47,7 +47,7 @@
     "test_directory_list": [
       "/mnt/data2/wangyuancheng/mls_english/test/audio"
     ],
-    "use_speaker": false,
+    "use_speaker": true,
     "use_noise": true,
     "snr_lower": 2,
     "snr_upper": 42,

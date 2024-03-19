@@ -161,7 +161,7 @@ def main():
     print("zero_shot_json_file_path", zero_shot_json_file_path)
     with torch.cuda.device(args.local_rank):
         torch.cuda.empty_cache()
-    model = UniAmphionVC(cfg.model)
+    model = UniAmphionVC(cfg=cfg.model, use_speaker = True, speaker_num = 12954)
     print("loading model")
     load_model(model, ckpt_path)
     print("model loaded")
