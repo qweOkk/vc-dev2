@@ -10,6 +10,8 @@ import argparse
 import json
 import torch
 from scipy.io.wavfile import write
+from tqdm import tqdm
+
 from env import AttrDict
 from meldataset import MAX_WAV_VALUE
 from models import BigVGAN as Generator
@@ -21,9 +23,7 @@ torch.backends.cudnn.benchmark = False
 
 def load_checkpoint(filepath, device):
     assert os.path.isfile(filepath)
-    print("Loading '{}'".format(filepath))
     checkpoint_dict = torch.load(filepath, map_location=device)
-    print("Complete.")
     return checkpoint_dict
 
 
@@ -48,7 +48,7 @@ def inference(a, h):
     generator.eval()
     generator.remove_weight_norm()
     with torch.no_grad():
-        for i, filname in enumerate(filelist):
+        for i, filname in tqdm(enumerate(filelist), total=len(filelist)):
             # load the mel spectrogram in .npy format
             x = np.load(os.path.join(a.input_mels_dir, filname))
             x = torch.FloatTensor(x).to(device)
@@ -61,19 +61,15 @@ def inference(a, h):
             audio = audio * MAX_WAV_VALUE
             audio = audio.cpu().numpy().astype('int16')
 
-            output_file = os.path.join(a.output_dir, os.path.splitext(filname)[0] + '_generated_e2e.wav')
+            output_file = os.path.join(a.output_dir, os.path.splitext(filname)[0] + '.wav')
             write(output_file, h.sampling_rate, audio)
-            print(output_file)
 
 
 def main():
-    print('Initializing Inference Process..')
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_mels_dir', default='test_mel_files')
     parser.add_argument('--output_dir', default='generated_files_from_mel')
     parser.add_argument('--checkpoint_file', required=True)
-    #gpu
     parser.add_argument('--gpu', type=int, default=7)
 
     a = parser.parse_args()

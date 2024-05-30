@@ -12,7 +12,6 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 import re
-import logging
 import json5
 import accelerate
 from accelerate.logging import get_logger
@@ -284,18 +283,19 @@ class TTSTrainer(BaseTrainer):
         """
         if checkpoint_path is None or checkpoint_path == "":
             ls = [str(i) for i in Path(checkpoint_dir).glob("*")]
-            ls.sort(key=lambda x: int(x.split("_")[-3].split("-")[-1]), reverse=True)
-            checkpoint_path = ls[0]
+            # example path epoch-0000_step-0017000_loss-1.972191, 找step最大的
+            checkpoint_path = max(ls, key=lambda x: int(x.split("_")[-2].split("-")[-1]))
+
         if self.accelerator.is_main_process:
             self.logger.info("Load model from {}".format(checkpoint_path))
         print("Load model from {}".format(checkpoint_path))
+        # if resume_type == "resume":
+        #     self.epoch = int(checkpoint_path.split("_")[-3].split("-")[-1])
+        #     self.step = int(checkpoint_path.split("_")[-2].split("-")[-1]) + 1
+        #     self.accelerator.load_state(checkpoint_path)
         if resume_type == "resume":
-            self.epoch = int(checkpoint_path.split("_")[-3].split("-")[-1]) + 1
-            self.step = int(checkpoint_path.split("_")[-2].split("-")[-1]) + 1
-            self.accelerator.load_state(checkpoint_path)
-        elif resume_type == "partial_resume":
-            self.epoch = int(checkpoint_path.split("_")[-3].split("-")[-1]) + 1
-            self.step = int(checkpoint_path.split("_")[-2].split("-")[-1]) + 1
+            self.epoch = int(checkpoint_path.split("_")[-3].split("-")[-1])
+            self.step = int(checkpoint_path.split("_")[-2].split("-")[-1]) 
             if isinstance(self.model, dict):
                 for idx, sub_model in enumerate(self.model.keys()):
                     try:
@@ -335,7 +335,7 @@ class TTSTrainer(BaseTrainer):
                         self.logger.info("Loaded 'model.safetensors' for resume")
                 self.model.cuda(self.accelerator.device)
             if self.accelerator.is_main_process:
-                self.logger.info("Load model weights for partially SUCCESS!")
+                self.logger.info("Load model weights SUCCESS!")
         elif resume_type == "finetune":
             if isinstance(self.model, dict):
                 for idx, sub_model in enumerate(self.model.keys()):
@@ -389,10 +389,6 @@ class TTSTrainer(BaseTrainer):
         # dump config file
         if self.accelerator.is_main_process:
             self.__dump_cfg(self.config_save_path)
-
-        # self.optimizer.zero_grad()
-        # Wait to ensure good to go
-
         self.accelerator.wait_for_everyone()
         while self.epoch < self.max_epoch:
             self.logger.info("\n")

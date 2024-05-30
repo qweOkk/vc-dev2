@@ -56,6 +56,7 @@ class VCDataset(Dataset):
         print(f"Using {NUM_WORKERS} workers")
         self.directory_list = directory_list
         print(f"Loading {len(directory_list)} directories: {directory_list}")
+
         # Load metadata cache
         self.metadata_cache_path = '/mnt/data2/hehaorui/ckpt/rp_metadata_cache.json'
         print(f"Loading metadata_cache from {self.metadata_cache_path}")
@@ -66,6 +67,7 @@ class VCDataset(Dataset):
         else:
             print(f"metadata_cache not found, creating new")
             self.metadata_cache = {}
+
         # Load speaker cache
         self.speaker_cache_path = '/mnt/data2/hehaorui/ckpt/rp_file2speaker.json'
         print(f"Loading speaker_cache from {self.speaker_cache_path}")
@@ -180,7 +182,7 @@ class VCDataset(Dataset):
         index2speaker = {}
         for file in self.files:
             num_frames = metadata_cache[file]
-            if SAMPLE_RATE * 3 <= num_frames <= SAMPLE_RATE * 25:
+            if SAMPLE_RATE * 3 <= num_frames <= SAMPLE_RATE * 30:
                 filtered_files.append(file)
                 all_num_frames.append(num_frames)
                 index2speaker[len(filtered_files) - 1] = speaker_cache[file]
@@ -270,6 +272,8 @@ class VCDataset(Dataset):
     def __getitem__(self, idx):
         file_path = self.filtered_files[idx]
         speech, _ = librosa.load(file_path, sr=SAMPLE_RATE)
+        if len(speech) > 30 * SAMPLE_RATE:
+            speech = speech[:30 * SAMPLE_RATE]
         speech = torch.tensor(speech, dtype=torch.float32)
         inputs = self._get_reference_vc(speech, hop_length=200)
         speaker = self.index2speaker[idx]
@@ -296,8 +300,11 @@ class VCDataset(Dataset):
             return {"speech": new_speech, "ref_speech": ref_speech, "ref_mask": ref_mask, "mask": mask}
         else:
             noisy_ref_speech = self.add_noise(ref_speech) # 添加噪声
-            noisy_ref_speech_with_reverb = self.add_reverb(noisy_ref_speech) #进混响
-            return {"speech": new_speech, "ref_speech": ref_speech, "noisy_ref_speech": noisy_ref_speech_with_reverb, "ref_mask": ref_mask, "mask": mask}
+            noisy_ref_speech_with_reverb = noisy_ref_speech
+
+            nosiy_speech = self.add_noise(new_speech) # 添加噪声
+
+            return {"speech": new_speech, "noisy_speech":nosiy_speech, "ref_speech": ref_speech, "noisy_ref_speech": noisy_ref_speech_with_reverb, "ref_mask": ref_mask, "mask": mask}
 
 class VCCollator(BaseCollator):
     def __init__(self, cfg):
@@ -338,6 +345,10 @@ class VCCollator(BaseCollator):
             # Process 'noisy_ref_speech' data
             noisy_ref_speeches = [process_tensor(b['noisy_ref_speech']) for b in batch]
             packed_batch_features['noisy_ref_speech'] = pad_sequence(noisy_ref_speeches, batch_first=True, padding_value=0)
+
+            # Process 'speech' data
+            noisy_speeches = [process_tensor(b['noisy_speech']) for b in batch]
+            packed_batch_features['noisy_speech'] = pad_sequence(noisy_speeches, batch_first=True, padding_value=0)
         return packed_batch_features
 
 

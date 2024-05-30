@@ -87,3 +87,6 @@ def diff_loss(pred, target, mask, loss_type="l1"):
         raise NotImplementedError()
     loss = (torch.mean(loss, dim=-1)).sum() / (mask.to(pred.dtype).sum())
     return loss
+
+
+

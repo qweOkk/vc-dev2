@@ -18,7 +18,7 @@ fi
 echo "Exprimental Configuration File: $exp_config"
 
 exp_name="trainSV"
-cuda_id=6
+cuda_id=7
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 

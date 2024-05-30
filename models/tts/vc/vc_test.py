@@ -47,8 +47,8 @@ def calculate_speaker_similarity(ref_dir, deg_dir):
         # --> p251_004_generated_e2e.wav
         deg_wav_file_name = deg_wav_file_name.split("_")[1:]
         deg_wav_file_name = "_".join(deg_wav_file_name)
-        # --> target_p251_004_generated_e2e.wav
-        ref_wav_file_name = "target_" + deg_wav_file_name
+        # --> prompt_p251_004.wav
+        ref_wav_file_name = "prompt_" + deg_wav_file_name
         ref_wav = os.path.join(ref_dir, ref_wav_file_name)  #
         if os.path.exists(ref_wav) == False:
             print(f"Reference file {ref_wav} not found, skipping")
@@ -62,16 +62,16 @@ def calculate_speaker_similarity(ref_dir, deg_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute speaker similarity_score")
+    parser.add_argument("--wavlm_path", help="Degraded wave folder.")
     parser.add_argument(
         "-r", "--ref_dir", required=True, help="Reference wave folder or file list."
     )
     parser.add_argument("-d", "--deg_dir", required=True, help="Degraded wave folder.")
-    #gpu_id = 7
     parser.add_argument("-g", "--gpu", type=int, default=7, help="GPU ID")
     args = parser.parse_args()
-    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
-    model = WavLMForXVector.from_pretrained("/mnt/data2/hehaorui/ckpt/wavlm")
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(args.wavlm_path)
+    model = WavLMForXVector.from_pretrained(args.wavlm_path)
     device = torch.device(f"cuda:{args.gpu}")
     model = model.to(device)
     similarity_score = calculate_speaker_similarity(args.ref_dir, args.deg_dir)
-    print(f"Speaker similarity: {similarity_score}")
+    print(f"SIM-O: {similarity_score}")

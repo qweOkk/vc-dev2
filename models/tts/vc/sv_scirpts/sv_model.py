@@ -1,13 +1,3 @@
-import torch
-import torch.nn as nn
-from models.tts.vc.ns2_uniamphion import UniAmphionVC
-from safetensors.torch import load_model
-from transformers import AutoProcessor, AutoModel
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-
 # -*- coding: utf-8 -*- #
 """*********************************************************************************************"""
 #   FileName     [ model.py ]
@@ -16,61 +6,13 @@ import torch.nn.functional as F
 #   Copyright    [ Copyleft(c), Speech Lab, NTU, Taiwan ]
 """*********************************************************************************************"""
 
-class SAP(nn.Module):
-    ''' Self Attention Pooling module incoporate attention mask'''
 
-    def __init__(self, out_dim, input_dim):
-        super(SAP, self).__init__()
-
-        # Setup
-        self.act_fn = nn.ReLU()
-        self.linear = nn.Linear(input_dim, out_dim)
-        self.sap_layer = SelfAttentionPooling(out_dim)
-    
-    def forward(self, feature, att_mask):
-
-        ''' 
-        Arguments
-            feature - [BxTxD]   Acoustic feature with shape 
-            att_mask   - [BxTx1]     Attention Mask logits
-        '''
-        #Encode
-        feature = self.act_fn(feature)
-        feature = self.linear(feature)
-        sap_vec = self.sap_layer(feature, att_mask)
-
-        return sap_vec
-
-class SelfAttentionPooling(nn.Module):
-    """
-    Implementation of SelfAttentionPooling 
-    Original Paper: Self-Attention Encoding and Pooling for Speaker Recognition
-    https://arxiv.org/pdf/2008.01077v1.pdf
-    """
-    def __init__(self, input_dim):
-        super(SelfAttentionPooling, self).__init__()
-        self.W = nn.Linear(input_dim, 1)
-    def forward(self, batch_rep, att_mask):
-        """
-        input:
-        batch_rep : size (N, T, H), N: batch size, T: sequence length, H: Hidden dimension
-        
-        attention_weight:
-        att_w : size (N, T, 1)
-        
-        return:
-        utter_rep: size (N, H)
-        """
-        seq_len = batch_rep.shape[1]
-        softmax = nn.functional.softmax
-        att_logits = self.W(batch_rep).squeeze(-1)
-        att_logits = att_mask + att_logits
-        att_w = softmax(att_logits, dim=-1).unsqueeze(-1)
-        utter_rep = torch.sum(batch_rep * att_w, dim=1)
-
-        return utter_rep
-
-
+###############
+# IMPORTATION #
+###############
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class AdMSoftmaxLoss(nn.Module):
 
@@ -107,6 +49,7 @@ class AdMSoftmaxLoss(nn.Module):
         return -torch.mean(L)
     
 class TDNN(nn.Module):
+        
     def __init__(
                     self, 
                     input_dim=23, 
@@ -194,70 +137,3 @@ class XVector(nn.Module):
         x = self.dropout_fc2(self.bn_fc2(F.relu(self.fc2(x))))
         x = self.fc3(x)
         return x
-
-
-
-class SVMODEL(nn.Module):
-    def __init__(self, config, num_speakers, vc_model_path):
-        super().__init__() 
-        self.vc_model = UniAmphionVC(config)
-        print(f"Loading VC model from {vc_model_path}")
-        load_model(self.vc_model, vc_model_path)
-        self.num_speakers = num_speakers
-        self.speaker_encoder = self.vc_model.reference_encoder
-        self.speaker_encoder.eval()
-        # freeze the speaker encoder
-        for param in self.speaker_encoder.parameters():
-            param.requires_grad = False
-        self.x_vector = XVector(input_dim = self.speaker_encoder.encoder_hidden, output_dim=1500, nOut=512)
-        self.amsoftmax = AdMSoftmaxLoss(self.x_vector.nOut, out_features=num_speakers) 
-        
-
-    def forward(self, x, x_mask, x_speaker):
-        with torch.no_grad():
-            _, encoded_x = self.speaker_encoder(x_ref=x, key_padding_mask=x_mask)
-            
-        spk_emb = self.x_vector(encoded_x)
-        am_loss = self.amsoftmax(spk_emb, x_speaker)
-        return am_loss
-    
-
-class SVMODEL_SSL(nn.Module):
-    def __init__(self, num_speakers):
-        super().__init__()
-        self.num_speakers = num_speakers
-        self.speaker_encoder = AutoModel.from_pretrained("/mnt/data3/hehaorui/ckpt/wav2vec/wav2vec-base/")
-        self.speaker_encoder.eval()
-        # freeze the speaker encoder
-        for param in self.speaker_encoder.parameters():
-            param.requires_grad = False
-      
-        # Assuming 768 as the output dimension for wav2vec 2.0 base model
-        # self.x_vector = XVector(input_dim=768, output_dim=1500, nOut=512)
-
-        self.fc = nn.Linear(768, 512)
-        self.relu = nn.ReLU()
-
-        self.amsoftmax = AdMSoftmaxLoss(in_features=512, out_features=num_speakers)
-        
-
-    def forward(self, x, x_mask, x_speaker):
-        with torch.no_grad():
-            outputs = self.speaker_encoder(x, attention_mask=x_mask)
-            encoded_x = outputs.last_hidden_state #  B x T x D
-            
-        # spk_emb = self.x_vector(encoded_x)
-        # mean
-        spk_emb = torch.mean(encoded_x, dim=1)
-        spk_emb = self.fc(spk_emb)
-        spk_emb = self.relu(spk_emb)
-        am_loss = self.amsoftmax(spk_emb, x_speaker)
-        return am_loss
-
-if __name__ == "__main__":
-    model = SVMODEL_SSL(num_speakers=10)
-    x = torch.randn(2, 16000)  # example shape for raw waveform input
-    x_mask = torch.ones(2, 16000).to(torch.bool)  # wav2vec 2.0 uses boolean masks
-    x_speaker = torch.randint(0, 10, (2,))
-    loss = model(x, x_mask, x_speaker)
-    print(loss)

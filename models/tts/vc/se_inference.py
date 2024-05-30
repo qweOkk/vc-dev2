@@ -63,7 +63,7 @@ def main():
     print("model loaded")
     model.cuda(args.local_rank)
     model.eval()
-
+    
     # paths to be modified
     HubertWithKmeans_path = "/mnt/data3/hehaorui/ckpt/mhubert"
     wav_path = "/mnt/data2/hehaorui/VoxCeleb1/wav/id10407/eD0bE59GgGU/00001.wav"

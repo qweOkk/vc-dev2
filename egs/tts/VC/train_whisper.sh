@@ -22,7 +22,7 @@ if [ -z "$exp_config" ]; then
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="new_mhubert"
+exp_name="new_whisper"
 
 if [ -z "$gpu" ]; then
     gpu="0,1,2,3"
@@ -38,8 +38,8 @@ CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
     --log_level debug \
     --resume \
     --resume_type resume \
-
-
+    --checkpoint_path /mnt/data3/hehaorui/ckpt/VC/epoch-0000_step-0310000_loss-0.555754
     # --resume \
     # --resume_type resume \
     # --checkpoint_path /mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0001_step-0400000_loss-0.037989
+

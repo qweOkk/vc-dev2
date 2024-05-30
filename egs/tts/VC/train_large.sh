@@ -18,11 +18,11 @@ python setup.py build_ext --inplace
 cd $work_dir
 
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config_4gpu.json
+    exp_config="${exp_dir}"/exp_config_4gpu_large.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="new_mhubert"
+exp_name="new_mhubert_large"
 
 if [ -z "$gpu" ]; then
     gpu="0,1,2,3"
@@ -31,13 +31,11 @@ fi
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
 
-CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
+CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 --mixed_precision fp16 \
 "${work_dir}"/bins/tts/train.py \
     --config $exp_config \
     --exp_name $exp_name \
     --log_level debug \
-    --resume \
-    --resume_type resume \
 
 
     # --resume \

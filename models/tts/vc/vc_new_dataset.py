@@ -11,7 +11,6 @@ from models.base.base_dataset import (
 
 from multiprocessing import Pool, Lock
 import random
-import torchaudio
 import rir_generator as rir
 import pandas as pd
 
@@ -21,7 +20,7 @@ lock = Lock()  # 创建一个全局锁
 SAMPLE_RATE = 16000
 
 def get_duration(file_path):
-    duration = librosa.get_duration(path=file_path, sr=SAMPLE_RATE)
+    duration = librosa.get_duration(path=file_path)
     return file_path, duration
 
 # def get_duration(file_path):
@@ -56,9 +55,9 @@ class VCDataset(Dataset):
         else:
             dataset_list = args.test_dataset_list
             dataset_cache_dir = args.cache_dir
-
-        random.shuffle(dataset_list)
-
+        
+        print(f"Using cache dir: {dataset_cache_dir}")
+        print(f"Using dataset list: {dataset_list}")
         os.makedirs(dataset_cache_dir, exist_ok=True)
         # create dataset2dir
 
@@ -68,6 +67,8 @@ class VCDataset(Dataset):
             'librilight_medium': '/mnt/data4/hehaorui/medium_15s',
             'librilight_large': '/mnt/data4/hehaorui/large_15s',
             'mls_test':'/mnt/data2/wangyuancheng/mls_english/test/audio',
+            'mls_dev':'/mnt/data2/wangyuancheng/mls_english/dev/audio',
+            'mls_train':'/mnt/data2/wangyuancheng/mls_english/train/audio',
         }
 
         self.use_speaker = args.use_speaker
@@ -192,8 +193,8 @@ class VCDataset(Dataset):
         idx = 0
         print(f"Filtering files with duration between 3.0 and 25.0 seconds")
         for file, duration in tqdm(results):
-            if duration > 3.0 and duration < 25.0:
-                rel_path = os.path.relpath(file, base_dir)
+            rel_path = os.path.relpath(file, base_dir)
+            if duration > 3.0 and duration < 30.0:
                 rel_path2duration[rel_path] = duration
                 speaker_id = file.split(os.sep)[-3]
                 #dataset+speaker_id

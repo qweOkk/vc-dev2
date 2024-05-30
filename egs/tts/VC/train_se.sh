@@ -10,6 +10,7 @@ work_dir=$(dirname $(dirname $(dirname $exp_dir)))
 
 export WORK_DIR=$work_dir
 export PYTHONPATH=$work_dir
+#export PYTHONPATH="/home/hehaorui/code/Amphion"
 export PYTHONIOENCODING=UTF-8
  
 cd $work_dir/modules/monotonic_align

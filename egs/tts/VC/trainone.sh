@@ -18,11 +18,11 @@ python setup.py build_ext --inplace
 cd $work_dir
 
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config.json
+    exp_config="${exp_dir}"/exp_config_1gpu_testing.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
-exp_name="multi_datasets"
+exp_name="getdata"
 
 if [ -z "$gpu" ]; then
     gpu="7"
@@ -30,12 +30,13 @@ fi
 
 ######## Train Model ###########
 echo "Exprimental Name: $exp_name"
+echo "Training Lauched on GPU: $gpu"
+echo "Main Process Port: 28500"
 
-CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 0 \
+CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 1234 \
 "${work_dir}"/bins/tts/train.py \
     --config $exp_config \
-    --exp_name $exp_name \
-    --log_level debug 
+    --exp_name $exp_name 
 
 
 # CUDA_VISIBLE_DEVICES=$gpu python \

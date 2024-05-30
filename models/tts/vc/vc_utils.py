@@ -2,6 +2,9 @@ import torch
 import pyworld as pw
 import numpy as np
 from librosa.filters import mel as librosa_mel_fn
+from torchaudio.functional import detect_pitch_frequency
+from torchaudio.functional import pitch_shift
+import concurrent.futures
 
 mel_basis = {}
 hann_window = {}
@@ -15,20 +18,17 @@ def spectral_normalize_torch(magnitudes):
     output = dynamic_range_compression_torch(magnitudes)
     return output
 
+
 def mel_spectrogram(
-    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
+    y, n_fft=1024, num_mels=80, sampling_rate=16000, hop_size=200, win_size=800, fmin=0, fmax=8000, center=False
 ):
     global mel_basis, hann_window, init_mel_and_hann
+    device = y.device
     if not init_mel_and_hann:
-        mel = librosa_mel_fn(
-            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
-        )
-        mel_basis[str(fmax) + "_" + str(y.device)] = (
-            torch.from_numpy(mel).float().to(y.device)
-        )
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
+        mel_basis[str(fmax) + "_" + str(y.device)] = (torch.from_numpy(mel).float().to(device))
+        hann_window[str(device)] = torch.hann_window(win_size).to(device)
         init_mel_and_hann = True
-
     y = torch.nn.functional.pad(
         y.unsqueeze(1),
         (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
@@ -48,12 +48,9 @@ def mel_spectrogram(
         return_complex=True,
     )
     spec = torch.view_as_real(spec)
-
     spec = torch.sqrt(spec.pow(2).sum(-1) + (1e-9))
-
     spec = torch.matmul(mel_basis[str(fmax) + "_" + str(y.device)], spec)
     spec = spectral_normalize_torch(spec)
-
     return spec
 
 def interpolate(f0):
@@ -79,3 +76,20 @@ def extract_world_f0(speech):
         f0s.append(f0[:frame_num])
     f0s = torch.stack(f0s, dim=0).float()
     return f0s
+
+
+def get_pitch_shifted_speech(speech, sr = 16000):
+    # pitch shift
+    shifted_speech = torch.zeros_like(speech)
+    need_shift = False
+    for i in range(speech.shape[0]):
+        sub_speech = speech[i]
+        f0_mean = detect_pitch_frequency(sub_speech, sr).mean()
+        if f0_mean > 350:
+            need_shift = True
+            n_step = -12 * torch.log2(f0_mean / 300)
+            shifted_speech[i] = pitch_shift(sub_speech, sr, n_steps=n_step)
+        else:
+            shifted_speech[i] = sub_speech
+    shifted_speech = shifted_speech.to(speech.device)
+    return shifted_speech, need_shift
