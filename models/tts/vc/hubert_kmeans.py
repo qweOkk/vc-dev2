@@ -133,7 +133,7 @@ class HubertWithKmeans(nn.Module):
             self.cluster_centers, "c d -> b c d", b=embed.shape[0]
         )
         dists = -torch.cdist(embed, batched_cluster_centers, p=2)
-        clusters = dists.argmax(dim=-1)
+        clusters = dists.argmax(dim=-1) # (batch, seq_len)
         quantize = F.embedding(clusters, self.cluster_centers)
 
         if flatten:

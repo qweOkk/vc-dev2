@@ -22,13 +22,9 @@ mkdir -p monotonic_align
 python setup.py build_ext --inplace
 cd $work_dir
 
-# 从这里开始
-clash
-
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config_4gpu_clean.json
+    exp_config="${exp_dir}"/exp_config_large.json
 fi
-
 
 
 echo "Exprimental Configuration File: $exp_config"
@@ -45,23 +41,25 @@ whisper_se_spk="/mnt/data2/hehaorui/ckpt/vc_new_exp/new_whisper_aug_spk/checkpoi
 hubert_se="/mnt/data2/hehaorui/ckpt/zs-vc-ckpt/epoch-0001_step-0796000_loss-0.567479/model.safetensors"
 hubert_se_both="/mnt/data2/hehaorui/ckpt/vc_new_exp/new_mhubert_aug_spk_both/checkpoint/epoch-0001_step-0844000_loss-1.542532/model.safetensors"
 
+hubert_large="/mnt/data2/hehaorui/ckpt/vc_new_exp/new_mhubert_large/checkpoint/epoch-0000_step-0240000_loss-0.589801/model.safetensors"
+
+
 #模型的
 hubert_clean="xxx"
 hubert_ref_noise="xx"
 hubert_both_noise="xx"
 
-checkpoint_path=$hubert
+checkpoint_path=$hubert_large
 
 # gpu的编号：一般用6/7,换卡
 cuda_id=6
 
-#prompt就是reference， target就是ground truth
-zero_shot_json_file_path="/mnt/data2/hehaorui/datasets/VCTK/zero_shot_json.json" #测试用例的json文件
-output_dir="/mnt/data2/hehaorui/exp_out" #
+
+
+zero_shot_json_file_path="/mnt/data2/hehaorui/datasets/VCTK/zero_shot_json.json"
+output_dir="/mnt/data2/hehaorui/exp_out"
 vocoder_path="/mnt/data2/wangyuancheng/model_ckpts/ns2/bigvgan/g_00490000"
 wavlm_path="/mnt/data3/hehaorui/pretrained_models/wavlm/wavlm-base-plus-sv"
-#加一个ASR模型的path
-#用来算WER
 
 
 echo "CUDA ID: $cuda_id"

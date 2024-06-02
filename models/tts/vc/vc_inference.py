@@ -74,7 +74,11 @@ def main():
         help="path to wavlm vocoder checkpoint."
     )
     parser.add_argument(
-        "--noisy",
+        "--ref_noisy",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--source_noisy",
         action="store_true",
     )
     parser.add_argument("--local_rank", default=-1, type=int)
@@ -109,7 +113,7 @@ def main():
     w2v = w2v.to(device=args.local_rank)
     w2v.eval()
 
-    model = UniAmphionVC(cfg=cfg.model, use_loss = False)
+    model = UniAmphionVC(cfg=cfg.model)
     print("loading model")
     if "pytorch_model.bin" in ckpt_path:
         model.load_state_dict(torch.load(ckpt_path))
@@ -125,22 +129,27 @@ def main():
     print("length of test cases", len(zero_shot_json))
 
     utt_dict = {}
-    if args.noisy:
-        print("using noisy prompt")
-        args.output_dir = args.output_dir + "_noisy"
+    if args.ref_noisy:
+        print("using noisy reference")
+        args.output_dir = args.output_dir + "_noisyref"
     else:
-        print("using clean prompt")
+        print("using clean reference")
+    if args.source_noisy:
+        print("using noisy source")
+        args.output_dir = args.output_dir + "_noisysource"
+    else:
+        print("using clean source")
     for info in zero_shot_json:
-        utt_id = info["uid"]
+        utt_id = info["uid"] #根据这个判断txt
         utt_dict[utt_id] = {}
         utt_dict[utt_id]["source_speech"] = info["source_wav_path"].replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
         utt_dict[utt_id]["target_speech"] = info["target_wav_path"].replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
         utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"].replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
-        # if args.noisy:
-        #     utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"].replace("/prompt/","/promptnoisy2/").replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
-        # else:
-        #     utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"].replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
-        if args.noisy:
+        if args.ref_noisy:
+            utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"].replace("/prompt/","/promptnoisy2/").replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
+        else:
+            utt_dict[utt_id]["prompt_speech"] = info["prompt_wav_path"].replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
+        if args.source_noisy:
             utt_dict[utt_id]["source_speech"] = info["source_wav_path"].replace("/source/","/sourcenoisy2/").replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
         else:
             utt_dict[utt_id]["source_speech"] = info["source_wav_path"].replace("/mnt/petrelfs/hehaorui/data/datasets/VCTK","/mnt/data2/hehaorui/datasets/VCTK")
@@ -158,7 +167,8 @@ def main():
     temp_id = 0
     all_keys = utt_dict.keys()
     # random sample 20 samples
-    sample_keys = list(utt_dict.keys())[:30]
+    # sample_keys = list(utt_dict.keys())[:10]
+    sample_keys = list(utt_dict.keys())
     # 应该有30个
     for utt_id in tqdm(sample_keys):
         utt = utt_dict[utt_id]
@@ -209,9 +219,10 @@ def main():
                 pitch=pitch,
                 x_ref=ref_mel,
                 x_ref_mask=ref_mask,
-                inference_steps=200,
+                inference_steps=200, 
                 sigma=1.2,
-            )
+            )# 150-300 0.95-1.5
+
             test_case = dict()
             recon_path = f"{args.output_dir}/recon/mel/recon_{utt_id}.npy"
             ref_path = f"{args.output_dir}/target/mel/target_{utt_id}.npy"
@@ -241,8 +252,6 @@ def main():
     with torch.cuda.device(args.local_rank):
         torch.cuda.empty_cache()
     print("Generating Reconstructed Wav Files")
-    #         f"python /home/hehaorui/code/Amphion/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/recon/mel'} --output_dir={f'{args.output_dir}/recon/wav'} --checkpoint_file=/mnt/data2/wangyuancheng/ns2_ckpts/bigvgan/g_00490000 --gpu {args.cuda_id}"
-
     os.system(
         f"python /home/hehaorui/code/Amphion/BigVGAN/inference_e2e.py --input_mels_dir={f'{args.output_dir}/recon/mel'} --output_dir={f'{args.output_dir}/recon/wav'} --checkpoint_file={args.vocoder_path} --gpu {args.cuda_id}"
     )
@@ -260,8 +269,16 @@ def main():
     )
     with torch.cuda.device(args.local_rank):
         torch.cuda.empty_cache()
+
+    # 就已经有了全部的wav文件
     print("running vc_test.py")
+    # sim-o
     os.system(f"python /home/hehaorui/code/Amphion/models/tts/vc/vc_test.py --wavlm_path={args.wavlm_path} -r={f'{args.output_dir}/prompt/wav'} -d={f'{args.output_dir}/recon/wav'} --gpu {args.cuda_id}")
+    # wer
+    # gt text ASR model text
+    # f'{args.output_dir}/recon/wav' 
+    # 用一个asr的模型转录出他的text
+    # 
 
 if __name__ == "__main__":
     main()

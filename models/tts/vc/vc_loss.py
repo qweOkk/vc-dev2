@@ -61,7 +61,7 @@ class ConstractiveSpeakerLoss(nn.Module):
 
     def forward(self, x, speaker_ids):
         # x : B, H
-        # speaker_ids: B
+        # speaker_ids: B 3 4 3
         speaker_ids = speaker_ids.reshape(-1)
         speaker_ids_expand = torch.zeros(len(speaker_ids),len(speaker_ids)).to(speaker_ids.device)
         speaker_ids_expand = (speaker_ids.view(-1,1) == speaker_ids).float() #形成一个mask

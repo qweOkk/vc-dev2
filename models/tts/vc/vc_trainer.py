@@ -35,13 +35,7 @@ class VCTrainer(TTSTrainer):
         self.args = args
         self.cfg = cfg
         cfg.exp_name = args.exp_name
-
-        if 'whisper' in args.exp_name:
-            self.content_extractor = "whisper"
-        elif 'mhubert' in args.exp_name:
-            self.content_extractor = "mhubert"
-        else:
-            raise ValueError("Invalid content extractor: {}".format(args.exp_name))
+        self.content_extractor = "mhubert"
 
         # 初始化加速器，并确保所有进程都已就绪
         self._init_accelerator()
@@ -52,12 +46,14 @@ class VCTrainer(TTSTrainer):
             self.logger = get_logger(args.exp_name, log_level="INFO")
 
         # 配置噪声和说话人使用
-        self.use_noise = self.cfg.trans_exp.use_noise
+        self.use_source_noise = self.cfg.trans_exp.use_source_noise
+        self.use_ref_noise = self.cfg.trans_exp.use_ref_noise
         self.use_speaker = self.cfg.trans_exp.use_speaker
 
         # 在主进程中记录配置信息
         if self.accelerator.is_main_process:
-            self.logger.info(f"use_noise: {self.use_noise}")
+            self.logger.info(f"use_source_noise: {self.use_source_noise}")
+            self.logger.info(f"use_ref_noise: {self.use_ref_noise}")
             self.logger.info(f"use_speaker: {self.use_speaker}")
 
         # 初始化一个时间窗口，用于监控或记录某些度量
@@ -98,6 +94,7 @@ class VCTrainer(TTSTrainer):
         # 在所有进程中设置随机种子
         with self.accelerator.main_process_first():
             self._set_random_seed(self.cfg.train.random_seed)
+
         # setup data_loader
         with self.accelerator.main_process_first():
             if self.accelerator.is_main_process:
@@ -170,7 +167,6 @@ class VCTrainer(TTSTrainer):
         self.config_save_path = os.path.join(self.exp_dir, "args.json")
 
         self.task_type = "VC"
-        self.speaker_loss_weight = 1.0
 
         self.contrastive_speaker_loss = ConstractiveSpeakerLoss()
 
@@ -200,18 +196,9 @@ class VCTrainer(TTSTrainer):
 
 
     def _build_model(self):
-        if self.content_extractor == "mhubert":
-            w2v  = HubertWithKmeans()
-            self.cfg.model.vc_feature.content_feature_dim = 768
-        elif self.content_extractor == "whisper":
-            w2v = WhisperNormal()
-            self.cfg.model.vc_feature.content_feature_dim = 512
-        else:
-            raise ValueError("Invalid content extractor: {}".format(self.content_extractor))
-
-        model = UniAmphionVC(cfg=self.cfg.model, use_loss = self.use_noise)
- 
-
+        w2v  = HubertWithKmeans()
+        self.cfg.model.vc_feature.content_feature_dim = 768
+        model = UniAmphionVC(cfg=self.cfg.model, use_ref_noise=self.use_ref_noise, use_source_noise=self.use_source_noise)
         return model, w2v
 
     def _build_dataset(self):
@@ -313,146 +300,96 @@ class VCTrainer(TTSTrainer):
         total_loss = 0.0
         train_losses = {}
         device = self.accelerator.device 
-        for k, v in batch.items():
-            if isinstance(v, torch.Tensor):
-                batch[k] = v.to(device)
-        speech = batch["speech"]
+
+        # 将所有Tensor类型的数据迁移到指定设备
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+
+        speech = batch["speech"] 
+        ref_speech = batch["ref_speech"] 
         
-        
-        ref_speech = batch["ref_speech"]
         with torch.set_grad_enabled(False):
-            if self.use_noise:
-                # 提取有噪音的mel光谱图
+            # 提取需要的特征和光谱图
+            mel = mel_spectrogram(speech).transpose(1, 2)
+            ref_mel = mel_spectrogram(ref_speech).transpose(1, 2)
+            mask = batch["mask"]
+            ref_mask = batch["ref_mask"]
+            
+            # 提取 pitch 和 content_feature
+            if not self.use_source_noise:
+                pitch = extract_world_f0(speech)
+                pitch = (pitch - pitch.mean(dim=1, keepdim=True)) / (pitch.std(dim=1, keepdim=True) + 1e-6) # Normalize pitch (B,T)
+                _, content_feature = self.w2v(speech) # semantic (B, T, 768)
+
+            if self.use_ref_noise:
                 noisy_ref_mel = mel_spectrogram(batch["noisy_ref_speech"]).transpose(1, 2)
                 
-                # 提取干净和参考的mel光谱图
-                mel = mel_spectrogram(speech).transpose(1, 2)
-                ref_mel = mel_spectrogram(ref_speech).transpose(1, 2)
-                mask = batch["mask"]
-                ref_mask = batch["ref_mask"]
-
-                
-                
-                # 将干净和有噪音的语音拼接在一起
-                combined_speech = torch.cat((batch["speech"], batch["noisy_speech"]), dim=0)
-                
-                # 将拼接后的语音送入w2v模型
+            if self.use_source_noise:
+                combined_speech = torch.cat((speech, batch["noisy_speech"]), dim=0)
                 _, combined_features = self.w2v(combined_speech)
-                
-                # 将w2v模型的输出拆分成content_feature和noisy_content_feature
-                content_feature, noisy_content_feature = torch.split(combined_features, batch["speech"].shape[0], dim=0)
-                
-                
-                # 对combined_speech提取pitch特征
+                content_feature, noisy_content_feature = torch.split(combined_features, speech.shape[0], dim=0)
                 combined_pitch = extract_world_f0(combined_speech)
-                
-                # 将combined_pitch拆分为noisy_pitch和clean_pitch，并分别进行标准化
-                clean_pitch, noisy_pitch = torch.split(combined_pitch, batch["speech"].shape[0], dim=0)
-                pitch = (clean_pitch - clean_pitch.mean(dim=1, keepdim=True)) / (
-                    clean_pitch.std(dim=1, keepdim=True) + 1e-6
-                )
-                noisy_pitch = (noisy_pitch - noisy_pitch.mean(dim=1, keepdim=True)) / (
-                    noisy_pitch.std(dim=1, keepdim=True) + 1e-6
-                )    
-            else: 
-                batch["pitch"] = extract_world_f0(batch["speech"])
-                pitch = (batch["pitch"] - batch["pitch"].mean(dim=1, keepdim=True)) / (
-                    batch["pitch"].std(dim=1, keepdim=True) + 1e-6
-                )  
-                batch["pitch"] = pitch
-                mel = mel_spectrogram(speech)  # (B, 80, T)
-                ref_mel = mel_spectrogram(ref_speech,)  # (B, 80, T')
-
-                mel = mel.transpose(1, 2)
-                ref_mel = ref_mel.transpose(1, 2)
-                with torch.set_grad_enabled(False):
-                    _, content_feature = self.w2v(speech)
-                pitch = batch["pitch"]
-                mask = batch["mask"]
-                ref_mask = batch["ref_mask"]
-
-
+                clean_pitch, noisy_pitch = torch.split(combined_pitch, speech.shape[0], dim=0)
+                pitch = (clean_pitch - clean_pitch.mean(dim=1, keepdim=True)) / (clean_pitch.std(dim=1, keepdim=True) + 1e-6)
+                noisy_pitch = (noisy_pitch - noisy_pitch.mean(dim=1, keepdim=True)) / (noisy_pitch.std(dim=1, keepdim=True) + 1e-6)
         
-        # ---------------Forward Model---------------
-        if self.use_noise:
-            diff_out, (ref_emb, noisy_ref_emb), (cond_emb , noisy_cond_emb) = self.model(
-                        x=mel,
-                        content_feature=content_feature,
-                        pitch=pitch,
-                        x_ref=ref_mel,
-                        x_mask=mask,
-                        x_ref_mask=ref_mask,
-                        noisy_x_ref=noisy_ref_mel,
-                        noisy_content_feature=noisy_content_feature,
-                        noisy_pitch=noisy_pitch,
-                    )
+        # FORWARD 模型
+        if self.use_ref_noise and self.use_source_noise:
+            diff_out, (ref_emb, noisy_ref_emb), (cond_emb, noisy_cond_emb) = self.model(
+                x=mel, content_feature=content_feature, pitch=pitch, x_ref=ref_mel,
+                x_mask=mask, x_ref_mask=ref_mask, noisy_x_ref=noisy_ref_mel,
+                noisy_content_feature=noisy_content_feature, noisy_pitch=noisy_pitch
+            )
+        elif self.use_ref_noise:
+            diff_out, (ref_emb, noisy_ref_emb), (cond_emb, _) = self.model(
+                x=mel, content_feature=content_feature, pitch=pitch, x_ref=ref_mel,
+                x_mask=mask, x_ref_mask=ref_mask, noisy_x_ref=noisy_ref_mel
+            )
         else:
-             diff_out, (ref_emb, _), (cond_emb , _) = self.model(
-                            x=mel,
-                            content_feature=content_feature,
-                            pitch=pitch,
-                            x_ref=ref_mel,
-                            x_mask=mask,
-                            x_ref_mask=ref_mask,
-                        )         
+            diff_out, (ref_emb, _), (cond_emb, _) = self.model(
+                x=mel, content_feature=content_feature, pitch=pitch, x_ref=ref_mel,
+                x_mask=mask, x_ref_mask=ref_mask
+            )
 
-        if self.use_noise:
-            # ---------------Loss Calculation--------------- for noisy ref
-            # ref_emb: (B, 32, 512)
-            # noisy_ref_emb: (B, 32, 512)
-            # speaker_ids: (B)
-            speaker_ids = batch["speaker_id"]
-            ref_emb = torch.mean(ref_emb, dim=1) # (B, 512)
-            noisy_speaker_ids = speaker_ids
-            noisy_ref_emb = torch.mean(noisy_ref_emb, dim=1) # (B, 512)
-
-            #get all_ref_emb (B+B, 512)
-            all_ref_emb = torch.cat([ref_emb, noisy_ref_emb], dim=0)
-            assert all_ref_emb.shape[0] == speaker_ids.shape[0] * 2
-            #get all_speaker_ids (B+B)
-            all_speaker_ids = torch.cat([speaker_ids, noisy_speaker_ids], dim=0)
-            assert all_speaker_ids.shape[0] == speaker_ids.shape[0] * 2
-            #get contrastive_speaker_loss
-            cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids)
-            cs_loss = cs_loss * 0.25
+        if self.use_ref_noise:
+            # B x N_query x D 
+            ref_emb = torch.mean(ref_emb, dim=1) # B x D
+            noisy_ref_emb = torch.mean(noisy_ref_emb, dim=1) # B x D
+            all_ref_emb = torch.cat([ref_emb, noisy_ref_emb], dim=0) # 2B x D
+            all_speaker_ids = torch.cat([batch["speaker_id"], batch["speaker_id"]], dim=0) # 2B
+            cs_loss = self.contrastive_speaker_loss(all_ref_emb, all_speaker_ids) * 0.25
             total_loss += cs_loss
-            train_losses["loss_ref"] = cs_loss
+            train_losses["ref_loss"] = cs_loss
 
-            # ---------------Loss Calculation--------------- for noisy cond
-            # cond_emb: (B, T, D) # b t d
-            # noisy_cond_emb: (B, T, D)
-            # l1 loss over cond_emb and noisy_cond_emb (cond_emb is the target)
-            diff_loss_cond = F.l1_loss(noisy_cond_emb, cond_emb, reduction="mean")
-            diff_loss_cond = diff_loss_cond * 2.0
+        if self.use_source_noise:
+            # B x T x D
+            diff_loss_cond = F.l1_loss(noisy_cond_emb, cond_emb, reduction="mean") * 2.0
             total_loss += diff_loss_cond
-            train_losses["loss_cond"] = diff_loss_cond
+            train_losses["source_loss"] = diff_loss_cond
 
         diff_loss_x0 = diff_loss(diff_out["x0_pred"], mel, mask=mask)
         total_loss += diff_loss_x0
         train_losses["diff_loss_x0"] = diff_loss_x0
 
         diff_loss_noise = diff_loss(diff_out["noise_pred"], diff_out["noise"], mask=mask)
-        total_loss += diff_loss_noise 
+        total_loss += diff_loss_noise
         train_losses["diff_loss_noise"] = diff_loss_noise
         train_losses["total_loss"] = total_loss
 
         self.optimizer.zero_grad()
         self.accelerator.backward(total_loss)
         if self.accelerator.sync_gradients:
-            self.accelerator.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()), 0.5
-            )
+            self.accelerator.clip_grad_norm_(filter(lambda p: p.requires_grad, self.model.parameters()), 0.5)
         self.optimizer.step()
         self.scheduler.step()
 
         for item in train_losses:
             train_losses[item] = train_losses[item].item()
 
-        learning_rate = self.optimizer.param_groups[0]['lr']
-        formatted_lr = f"{learning_rate:.1e}"
-        train_losses['learning_rate'] = formatted_lr
+        train_losses['learning_rate'] = f"{self.optimizer.param_groups[0]['lr']:.1e}"
         train_losses["batch_size"] = batch["speaker_id"].shape[0]
+        
         return (train_losses["total_loss"], train_losses, None)
+
     
 
     def _train_epoch(self):

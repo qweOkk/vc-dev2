@@ -46,7 +46,8 @@
       "/mnt/data2/wangyuancheng/mls_english/test/audio"
     ],
     "use_speaker": false,
-    "use_noise": true,
+    "use_ref_noise": true,
+    "use_source_noise": true,
     "noise_dir": "/home/hehaorui/code/Amphion/MS-SNSD/noise_train",
     "test_noise_dir": "/home/hehaorui/code/Amphion/MS-SNSD/noise_test" 
   }
