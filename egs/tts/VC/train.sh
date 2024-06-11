@@ -18,7 +18,7 @@ python setup.py build_ext --inplace
 cd $work_dir
 
 if [ -z "$exp_config" ]; then
-    exp_config="${exp_dir}"/exp_config_4gpu.json
+    exp_config="${exp_dir}"/exp_config_4gpu_clean.json
 fi
 echo "Exprimental Configuration File: $exp_config"
 
@@ -38,8 +38,8 @@ CUDA_VISIBLE_DEVICES=$gpu accelerate launch --main_process_port 28500 \
     --log_level debug \
     --resume \
     --resume_type resume \
-
+    --checkpoint_path /nfsmnt/qiujunwen/ckpt/vc_new_exp/new_mhubert/checkpoint/final_epoch-0400_step-0002800_loss-41.564853
 
     # --resume \
     # --resume_type resume \
-    # --checkpoint_path /mnt/data2/hehaorui/ckpt/vc/resume_vc_train/checkpoint/epoch-0001_step-0400000_loss-0.037989
+    

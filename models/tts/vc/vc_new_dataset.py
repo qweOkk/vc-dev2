@@ -63,7 +63,7 @@ class VCDataset(Dataset):
 
         self.dataset2dir = {
             'mls_english_opus': '/mnt/data2/hehaorui/mls_english_opus/train/audio',
-            'librilight_small': '/mnt/data4/hehaorui/small_15s',
+            'librilight_small': '/nfsmnt/share/small',
             'librilight_medium': '/mnt/data4/hehaorui/medium_15s',
             'librilight_large': '/mnt/data4/hehaorui/large_15s',
             'mls_test':'/mnt/data2/wangyuancheng/mls_english/test/audio',
